@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API\Farma\Productos;
 use App\DTO\Farma\ProdCategoriaData;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Productos\ProdCategoriaRequest;
+use App\Http\Requests\Util\TableSearchRequest;
 use App\Http\Resources\Farma\ProdCategoriaResource;
 use App\Interfaces\Farma\ProdCategoriaService;
 use Illuminate\Database\QueryException;
@@ -15,10 +16,10 @@ class ProdCategoriaController extends Controller
 {
     public function __construct(private readonly ProdCategoriaService $repository) {}
 
-    public function index(): JsonResponse
+    public function index(TableSearchRequest $request): JsonResponse
     {
         return $this->sendResponse(
-            ProdCategoriaResource::collection($this->repository->paginate()),
+            ProdCategoriaResource::collection($this->repository->searchPage((string) $request->validated('search', ''), ['id', 'nombre'], [])),
             'ok',
             200,
             true,

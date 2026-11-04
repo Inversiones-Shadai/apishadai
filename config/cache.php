@@ -17,6 +17,10 @@ return [
 
     'default' => env('CACHE_STORE', 'database'),
 
+    'limiter' => env('RATE_LIMIT_STORE', env('CACHE_STORE', 'database')),
+
+    'serializable_classes' => false,
+
     /*
     |--------------------------------------------------------------------------
     | Cache Stores

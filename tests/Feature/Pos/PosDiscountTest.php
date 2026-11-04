@@ -138,7 +138,7 @@ class PosDiscountTest extends TestCase
         ob_start();
         imagepng($source);
         $image = base64_encode(ob_get_clean());
-        imagedestroy($source);
+        unset($source);
         foreach (range(1, 13) as $i) {
             DB::table('productos')->insert(['id' => 100 + $i, 'codigo' => 'UNRELATED-'.$i,
                 'descripcion' => sprintf('TEST leche %02d', $i), 'imagen' => $i === 1 ? $image : null]);

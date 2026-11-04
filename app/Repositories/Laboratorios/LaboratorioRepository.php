@@ -34,7 +34,7 @@ class LaboratorioRepository extends Repository implements LaboratorioService
     {
         return parent::buildBaseQuery()
             ->select(['id', 'nombre', 'telefono', 'direccion', 'created_at', 'updated_at'])
-            ->selectRaw('imagen IS NOT NULL AS tiene_imagen');
+            ->selectRaw('imagen IS NOT NULL AND imagen <> \'\' AS tiene_imagen, CASE WHEN LENGTH(imagen) = 36 THEN imagen ELSE NULL END AS imagen_uuid');
     }
 
     public function update(int $id, array $data): bool

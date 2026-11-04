@@ -16,7 +16,7 @@ class PurchaseCatalogController extends Controller
     public function index(Request $request, string $catalogoCompra): JsonResponse
     {
         $records = $this->repository
-            ->paginate($catalogoCompra, $request->integer('per_page', 30))
+            ->paginate($catalogoCompra, $request->integer('per_page', 30), $request->string('search')->toString())
             ->through(fn (object $record): array => $this->record($record));
 
         return $this->sendResponse($records, 'ok', 200, true);

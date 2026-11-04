@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API\Farma\Productos;
 use App\DTO\Farma\FamiliaData;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Productos\FamiliaRequest;
+use App\Http\Requests\Util\TableSearchRequest;
 use App\Http\Resources\Farma\FamiliaOptionResource;
 use App\Http\Resources\Farma\FamiliaResource;
 use App\Interfaces\Farma\FamiliaService;
@@ -18,10 +19,10 @@ class FamiliaController extends Controller
 {
     public function __construct(private readonly FamiliaService $repository) {}
 
-    public function index(): JsonResponse
+    public function index(TableSearchRequest $request): JsonResponse
     {
         return $this->sendResponse(
-            FamiliaResource::collection($this->repository->paginate()),
+            FamiliaResource::collection($this->repository->searchPage((string) $request->validated('search', ''), ['id', 'descripcion'], ['Presentacion' => ['descripcion'], 'Administracion' => ['descripcion']])),
             'ok',
             200,
             true,

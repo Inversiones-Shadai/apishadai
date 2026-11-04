@@ -5,14 +5,16 @@ namespace App\Repositories\Farma;
 use App\Interfaces\Farma\PurchaseCatalogService;
 use App\Models\Farma\CompraTipo;
 use App\Models\Farma\TransaccionTipo;
+use App\Support\TableSearch;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Pagination\LengthAwarePaginator;
 
 class PurchaseCatalogRepository implements PurchaseCatalogService
 {
-    public function paginate(string $catalog, int $perPage = 30): LengthAwarePaginator
+    public function paginate(string $catalog, int $perPage = 30, string $search = ''): LengthAwarePaginator
     {
-        return $this->model($catalog)->newQuery()->orderBy('descripcion')->paginate(max(1, min($perPage, 100)));
+        return TableSearch::apply($this->model($catalog)->newQuery(), $search, ['descripcion'])
+            ->orderBy('descripcion')->paginate(max(1, min($perPage, 100)));
     }
 
     public function find(string $catalog, int $id): ?Model

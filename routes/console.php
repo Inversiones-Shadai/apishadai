@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Farma\Distribucion;
+use App\Models\Farma\Lote;
 use App\Models\Farma\Transferencia;
 use App\Models\Pos\CatalogoPos;
 use App\Services\Headquarters\ChangeRecorder;
@@ -150,21 +151,57 @@ Artisan::command('pos:attendance-mail {--fecha=} {--enqueue}', function (PosAtte
 })->purpose('Consultar o recuperar correos de asistencia POS sin modificar marcas ni duplicar tareas');
 
 Artisan::command('hq:seed-lots', function (ChangeRecorder $recorder): int {
-    if (! $recorder->enabled()) { $this->error('La publicación HQ debe estar habilitada.'); return 1; }
-    config(['headquarters.send_immediately' => false]); $count = 0;
-    \App\Models\Farma\Lote::query()->select('id')->chunkById(100, function ($rows) use ($recorder, &$count): void {
-        foreach ($rows as $row) DB::transaction(function () use ($row, $recorder, &$count): void {
-            $lot = \App\Models\Farma\Lote::whereKey($row->id)->lockForUpdate()->first();
-            if (! $lot || DB::table('sync_entity_versions')->where('entity', 'lotes')->where('entity_id', $lot->id)->exists()) return;
-            $recorder->record($lot, 'CREATE'); $count++;
-        }, 3);
-    });
-    $this->info("Lotes maestros preparados: $count."); return 0;
-})->purpose('Publicar inicialmente los lotes maestros sin modificar sus datos ni crear precios');
+    if (! $recorder->enabled()) {
+        $this->error('La publicación HQ debe estar habilitada.');
 
+        return 1;
+    }
+    config(['headquarters.send_immediately' => false]);
+    $count = 0;
+    Lote::query()->select('id')->chunkById(100, function ($rows) use ($recorder, &$count): void {
+        foreach ($rows as $row) {
+            DB::transaction(function () use ($row, $recorder, &$count): void {
+                $lot = Lote::whereKey($row->id)->lockForUpdate()->first();
+                if (! $lot || DB::table('sync_entity_versions')->where('entity', 'lotes')->where('entity_id', $lot->id)->exists()) {
+                    return;
+                }
+                $recorder->record($lot, 'CREATE');
+                $count++;
+            }, 3);
+        }
+    });
+    $this->info("Lotes maestros preparados: $count.");
+
+    return 0;
+})->purpose('Publicar inicialmente los lotes maestros sin modificar sus datos ni crear precios');
 
 Artisan::command('hq:push-lots {--batches=100}', function (OutboxSender $sender): int {
     $result = $sender->sendLots(max(1, min(1000, (int) $this->option('batches'))));
     $this->info("Lotes enviados: {$result['sent']}; lotes pendientes: {$result['pending']}.");
+
     return $result['pending'] === 0 ? 0 : 1;
 })->purpose('Enviar exclusivamente lotes maestros; conservar otros eventos pendientes');
+
+Artisan::command('hq:refresh-lot-valuations', function (ChangeRecorder $recorder): int {
+    if (! $recorder->enabled()) {
+        $this->error('La publicación HQ debe estar habilitada.');
+
+        return 1;
+    }
+    config(['headquarters.send_immediately' => false]);
+    $count = 0;
+    Lote::query()->select('id')->chunkById(100, function ($rows) use ($recorder, &$count): void {
+        foreach ($rows as $row) {
+            DB::transaction(function () use ($row, $recorder, &$count): void {
+                $lot = Lote::whereKey($row->id)->lockForUpdate()->first();
+                if ($lot !== null) {
+                    $recorder->record($lot, 'UPDATE');
+                    $count++;
+                }
+            }, 3);
+        }
+    });
+    $this->info("Metadatos de valoración de lotes preparados: $count. Sin modificar costos ni existencias.");
+
+    return 0;
+})->purpose('Volver a publicar costo e ISV propios de lotes sin modificar operaciones');

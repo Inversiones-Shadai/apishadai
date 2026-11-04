@@ -25,7 +25,7 @@ class HeadquartersClient
         $uri = parse_url($url, PHP_URL_PATH);
         $canonical = strtoupper($method)."\n".$uri."\n".$timestamp."\n".$nonce."\n".hash('sha256', $body);
         try {
-            $response = Http::acceptJson()->withOptions(['allow_redirects' => false])->connectTimeout(2)->timeout(10)->withHeaders([
+            $response = Http::acceptJson()->withOptions(['allow_redirects' => false])->connectTimeout(2)->timeout(30)->withHeaders([
                 'X-Apishadai-Key-Id' => config('headquarters.key_id'), 'X-Apishadai-Timestamp' => $timestamp,
                 'X-Apishadai-Nonce' => $nonce, 'X-Apishadai-Signature' => hash_hmac('sha256', $canonical, $secret),
             ])->withBody($body, 'application/json')->send(strtoupper($method), $url);

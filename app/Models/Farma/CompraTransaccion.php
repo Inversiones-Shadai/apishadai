@@ -2,11 +2,14 @@
 
 namespace App\Models\Farma;
 
+use App\Models\Concerns\StoresImageUuid;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class CompraTransaccion extends Model
 {
+    use StoresImageUuid;
+
     protected $table = 'compra_transc';
 
     protected $fillable = ['nro', 'compra', 'tipo', 'valor', 'img'];

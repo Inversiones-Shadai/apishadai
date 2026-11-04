@@ -6,8 +6,10 @@ use App\DTO\LaboratorioDTO;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Laboratorios\LaboratorioRequest;
 use App\Http\Requests\Farma\Laboratorios\LaboratorioUpdateRequest;
+use App\Http\Requests\Util\TableSearchRequest;
 use App\Http\Resources\Laboratorios\LaboratorioResource;
 use App\Interfaces\Laboratorios\LaboratorioService;
+use App\Services\Images\ImageStorage;
 use App\Utils\Services\Base64UtilityService;
 use Illuminate\Http\JsonResponse;
 use Throwable;
@@ -19,11 +21,11 @@ class LaboratoriosController extends Controller
         private readonly Base64UtilityService $base64UtilityService,
     ) {}
 
-    public function index(): JsonResponse
+    public function index(TableSearchRequest $request): JsonResponse
     {
         try {
             return $this->sendResponse(
-                LaboratorioResource::collection($this->service->paginate()),
+                LaboratorioResource::collection($this->service->searchPage((string) $request->validated('search', ''), ['nombre', 'telefono', 'direccion'], [])),
                 'ok',
                 200,
                 true,
@@ -127,6 +129,7 @@ class LaboratoriosController extends Controller
     {
         try {
             $stored = $this->service->getImage($id);
+            $stored = app(ImageStorage::class)->base64($stored);
 
             if ($stored === null) {
                 return $this->sendError('Imagen no encontrada.', null, 404);

@@ -2,6 +2,7 @@
 
 namespace App\Models\Farma;
 
+use App\Models\Concerns\StoresImageUuid;
 use App\Models\Proveedores;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
@@ -10,6 +11,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Compra extends Model
 {
+    use StoresImageUuid;
+
     protected $table = 'compras';
 
     protected $fillable = [

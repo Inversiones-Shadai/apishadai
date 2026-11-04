@@ -24,6 +24,14 @@ class DistributionRequest extends BaseRequest
             'dto2' => ['required', 'numeric', 'min:0', 'max:99.99'],
             'dto3' => ['required', 'numeric', 'min:0', 'max:99.99'],
             'dto4' => ['required', 'numeric', 'min:0', 'max:99.99'],
+            'promocion_activa' => ['sometimes', 'boolean'],
+            'promocion_porcentaje' => ['required_if:promocion_activa,true', 'nullable', 'numeric', 'gt:0', 'max:99.99'],
+            'promocion_hasta' => ['required_if:promocion_activa,true', 'nullable', 'date_format:Y-m-d'],
+            'mostrar_encabezado' => ['sometimes', 'boolean'],
+            'encabezado_texto' => ['nullable', 'string', 'max:160'],
+            'promocion_todos_stocks' => ['sometimes', 'boolean'],
+            'promocion_stock_ids' => ['required_if:promocion_todos_stocks,false', 'nullable', 'array', 'min:1', 'max:100'],
+            'promocion_stock_ids.*' => ['required', 'integer', 'min:1', 'distinct', 'exists:stocks,id'],
         ];
     }
 

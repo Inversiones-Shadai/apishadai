@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API\Farma\Productos;
 use App\DTO\Farma\ProdEstadoData;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Productos\ProdEstadoRequest;
+use App\Http\Requests\Util\TableSearchRequest;
 use App\Http\Resources\Farma\ProdEstadoResource;
 use App\Interfaces\Farma\ProdEstadoService;
 use Illuminate\Database\QueryException;
@@ -15,10 +16,10 @@ class ProdEstadoController extends Controller
 {
     public function __construct(private readonly ProdEstadoService $repository) {}
 
-    public function index(): JsonResponse
+    public function index(TableSearchRequest $request): JsonResponse
     {
         return $this->sendResponse(
-            ProdEstadoResource::collection($this->repository->paginate()),
+            ProdEstadoResource::collection($this->repository->searchPage((string) $request->validated('search', ''), ['id', 'descripcion'], [])),
             'ok',
             200,
             true,

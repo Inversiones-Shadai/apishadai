@@ -2,11 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\PushHeadquartersOutboxJob;
 use App\Jobs\SendHeadquartersApprovalJob;
 use App\Mail\HeadquartersApprovalMail;
 use App\Models\Device;
 use App\Models\DeviceEstado;
 use App\Models\Farma\Distribucion;
+use App\Models\Farma\Lote;
 use App\Models\Farma\ProdCategoria;
 use App\Models\Farma\Transferencia;
 use App\Models\Pos\Clientepos;
@@ -29,6 +31,49 @@ use Tests\TestCase;
 
 class HeadquartersGatewayOutboxTest extends TestCase
 {
+    public function test_inventory_valuation_tax_comes_from_the_lot_without_a_sale_price(): void
+    {
+        Schema::create('lotes', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('producto');
+            $table->string('lote');
+            $table->decimal('costo', 19, 4)->nullable();
+            $table->boolean('isv')->nullable();
+        });
+        DB::table('sync_entity_versions')->insertOrIgnore(['entity' => 'productos', 'entity_id' => 101, 'version' => 1]);
+        DB::table('lotes')->insert(['id' => 1, 'producto' => 101, 'lote' => 'TEST-VAL', 'costo' => 4, 'isv' => true]);
+        config(['farma.purchase_isv_rate' => 0.125]);
+        $publish = function (): array {
+            DB::transaction(fn () => app(ChangeRecorder::class)->record(Lote::findOrFail(1), 'UPDATE'));
+
+            return SyncChange::where('entity', 'lotes')->orderByDesc('id')->firstOrFail()->payload;
+        };
+        $payload = $publish();
+        $this->assertNull($payload['venta']);
+        $this->assertSame(['tasa_isv' => '12.5000', 'tratamiento' => 'GRAVADO'], $payload['valoracion']);
+        DB::table('lotes')->where('id', 1)->update(['isv' => false]);
+        $this->assertSame(['tasa_isv' => '0.0000', 'tratamiento' => 'EXENTO'], $publish()['valoracion']);
+        DB::table('lotes')->where('id', 1)->update(['isv' => null]);
+        $this->assertNull($publish()['valoracion']);
+        Schema::create('distribucion', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('lote');
+            $table->decimal('precio', 19, 4)->nullable();
+            $table->boolean('isv')->nullable();
+        });
+        DB::table('distribucion')->insert(['id' => 1, 'lote' => 1, 'precio' => null, 'isv' => true]);
+        $this->assertSame(['tasa_isv' => '12.5000', 'tratamiento' => 'GRAVADO'], $publish()['valoracion']);
+        DB::table('distribucion')->where('id', 1)->update(['isv' => false]);
+        $this->assertSame(['tasa_isv' => '0.0000', 'tratamiento' => 'EXENTO'], $publish()['valoracion']);
+        DB::table('distribucion')->insert(['id' => 2, 'lote' => 1, 'precio' => 1, 'isv' => false]);
+        $this->assertNull($publish()['valoracion']);
+        DB::table('distribucion')->where('id', 2)->delete();
+        DB::table('lotes')->where('id', 1)->update(['isv' => true]);
+        config(['farma.purchase_isv_rate' => 0]);
+        $this->assertNull($publish()['valoracion']['tasa_isv']);
+        $this->assertSame(4, (int) DB::table('lotes')->value('costo'));
+    }
+
     public function test_nested_lot_metadata_publishes_cost_and_explicit_sale_data_without_changing_inventory(): void
     {
         Schema::create('lotes', function (Blueprint $table): void {
@@ -52,6 +97,13 @@ class HeadquartersGatewayOutboxTest extends TestCase
         DB::table('sync_entity_versions')->insertOrIgnore(['entity' => 'productos', 'entity_id' => 101, 'version' => 1]);
         DB::table('lotes')->insert(['id' => 1, 'producto' => 101, 'lote' => 'TEST-LOT', 'costo' => 12.34]);
         DB::table('distribucion')->insert(['id' => 1, 'lote' => 1, 'precio' => 20, 'isv' => false]);
+        (require base_path('database/migrations/2026_10_31_000001_distribution_promotions.php'))->up();
+        (require base_path('database/migrations/2026_10_31_000002_distribution_promotion_stocks.php'))->up();
+        DB::table('distribucion')->where('id', 1)->update([
+            'promocion_activa' => true, 'promocion_porcentaje' => 15, 'promocion_hasta' => '2026-12-31',
+            'mostrar_encabezado' => true, 'encabezado_texto' => 'Oferta del lote',
+            'promocion_todos_stocks' => false, 'promocion_stock_ids' => '[7]',
+        ]);
         DB::transaction(fn () => app(ChangeRecorder::class)->record(
             Distribucion::findOrFail(1), 'UPDATE'));
         $lot = SyncChange::where('entity', 'distribucion')->firstOrFail()->payload['lote_datos'];
@@ -63,6 +115,13 @@ class HeadquartersGatewayOutboxTest extends TestCase
         $this->assertSame('0.0000', $sale['tasa_isv']);
         $this->assertSame('EXENTO', $sale['tratamiento']);
         $this->assertFalse($sale['incluye_isv']);
+        $this->assertTrue($sale['promocion_activa']);
+        $this->assertSame('15.00', $sale['promocion_porcentaje']);
+        $this->assertSame('2026-12-31', $sale['promocion_hasta']);
+        $this->assertTrue($sale['mostrar_encabezado']);
+        $this->assertSame('Oferta del lote', $sale['encabezado_texto']);
+        $this->assertFalse($sale['promocion_todos_stocks']);
+        $this->assertSame([7], $sale['promocion_stock_ids']);
         $this->assertSame(1, DB::table('hq_outbox')->count());
         DB::table('lotes')->where('id', 1)->update(['costo' => null]);
         DB::transaction(fn () => app(ChangeRecorder::class)->record(
@@ -132,6 +191,7 @@ class HeadquartersGatewayOutboxTest extends TestCase
         Http::fake(function ($request) {
             $this->assertCount(1, $request['changes']);
             $this->assertSame('lotes', $request['changes'][0]['entity']);
+
             return Http::response(['data' => ['accepted' => [$request['changes'][0]['uuid']]]]);
         });
         ProdCategoria::create(['nombre' => 'Synthetic category']);
@@ -394,6 +454,7 @@ class HeadquartersGatewayOutboxTest extends TestCase
 
     public function test_rollback_does_not_publish_or_leave_changes_or_versions(): void
     {
+        Queue::fake();
         Http::preventStrayRequests();
         Http::fake();
         config(['headquarters.send_immediately' => true]);
@@ -408,11 +469,65 @@ class HeadquartersGatewayOutboxTest extends TestCase
         $this->assertDatabaseCount('sync_changes', 0);
         $this->assertDatabaseCount('sync_entity_versions', 0);
         $this->assertDatabaseCount('hq_outbox', 0);
+        Queue::assertNothingPushed();
         Http::assertNothingSent();
+    }
+
+    public function test_immediate_publication_is_queued_only_after_the_business_commit_even_with_a_sync_default(): void
+    {
+        Schema::create('jobs', function (Blueprint $table): void {
+            $table->bigIncrements('id');
+            $table->string('queue')->index();
+            $table->longText('payload');
+            $table->unsignedTinyInteger('attempts');
+            $table->unsignedInteger('reserved_at')->nullable();
+            $table->unsignedInteger('available_at');
+            $table->unsignedInteger('created_at');
+        });
+        Http::preventStrayRequests();
+        Http::fake(fn ($request) => Http::response(['data' => ['accepted' => [$request['changes'][0]['uuid']]]]));
+        config(['headquarters.send_immediately' => true, 'queue.default' => 'sync',
+            'queue.connections.database.connection' => config('database.default'),
+            'queue.connections.database.table' => 'jobs']);
+
+        DB::transaction(function (): void {
+            ProdCategoria::create(['nombre' => 'Medicamentos']);
+            $this->assertDatabaseCount('jobs', 0);
+            Http::assertNothingSent();
+        });
+
+        $this->assertDatabaseCount('jobs', 1);
+        $this->assertDatabaseHas('hq_outbox', ['sent_at' => null, 'attempts' => 0, 'claim_token' => null]);
+        Http::assertNothingSent();
+
+        $job = Queue::connection('database')->pop();
+        $this->assertNotNull($job);
+        $this->assertSame(PushHeadquartersOutboxJob::class, $job->payload()['displayName']);
+        $job->fire();
+        $this->assertDatabaseCount('jobs', 0);
+        $this->assertSame(0, DB::table('hq_outbox')->whereNull('sent_at')->count());
+        Http::assertSentCount(1);
+    }
+
+    public function test_queue_failure_keeps_the_committed_change_available_for_the_scheduled_sender(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(fn ($request) => Http::response(['data' => ['accepted' => [$request['changes'][0]['uuid']]]]));
+        config(['headquarters.send_immediately' => true]);
+        $this->mock(Dispatcher::class)->shouldReceive('dispatch')->once()->andThrow(new RuntimeException('Queue unavailable'));
+
+        $category = ProdCategoria::create(['nombre' => 'Medicamentos']);
+
+        $this->assertDatabaseHas('prod_categorias', ['id' => $category->id]);
+        $this->assertDatabaseCount('sync_changes', 1);
+        $this->assertDatabaseHas('hq_outbox', ['sent_at' => null, 'attempts' => 0, 'claim_token' => null]);
+        Http::assertNothingSent();
+        $this->assertSame(['sent' => 1, 'pending' => 0], app(OutboxSender::class)->send());
     }
 
     public function test_hq_outage_keeps_business_data_and_retry_reuses_the_same_uuid(): void
     {
+        Queue::fake();
         Http::preventStrayRequests();
         $attempt = 0;
         Http::fake(function ($request) use (&$attempt) {
@@ -422,6 +537,10 @@ class HeadquartersGatewayOutboxTest extends TestCase
         $category = ProdCategoria::create(['nombre' => 'Medicamentos']);
         $uuid = SyncChange::firstOrFail()->uuid;
         $this->assertDatabaseHas('prod_categorias', ['id' => $category->id]);
+        $this->assertDatabaseHas('hq_outbox', ['sent_at' => null, 'attempts' => 0]);
+        Http::assertNothingSent();
+        Queue::assertPushed(PushHeadquartersOutboxJob::class, 1);
+        app(PushHeadquartersOutboxJob::class)->handle(app(OutboxSender::class));
         $this->assertDatabaseHas('hq_outbox', ['sent_at' => null, 'attempts' => 1]);
         $this->travel(11)->seconds();
         $result = app(OutboxSender::class)->send();

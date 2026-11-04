@@ -1,9 +1,24 @@
 <?php
 
+use App\Http\Controllers\API\Farma\Compras\ProductCostReportController;
 use App\Http\Controllers\API\Farma\Compras\PurchaseCatalogController;
 use App\Http\Controllers\API\Farma\Compras\PurchaseController;
+use App\Http\Controllers\API\Farma\Compras\PurchaseReportController;
 use App\Http\Controllers\API\Farma\Compras\PurchaseTransactionController;
+use App\Http\Middleware\EnsureProductCostReportPermission;
+use App\Http\Middleware\EnsurePurchaseReportPermission;
 use Illuminate\Support\Facades\Route;
+
+Route::get('reporte-costeo/consultar', ProductCostReportController::class)->middleware(EnsureProductCostReportPermission::class);
+
+Route::prefix('reporte-compras')->group(function (): void {
+    $controller = PurchaseReportController::class;
+    $guard = EnsurePurchaseReportPermission::class;
+    Route::get('/listar', [$controller, 'index'])->middleware($guard.':rcpbtn01');
+    Route::get('/proveedores', [$controller, 'providers'])->middleware($guard.':rcpbtn02');
+    Route::get('/pagos/{id}', [$controller, 'payments'])->whereNumber('id')->middleware($guard.':rcpbtn03');
+    Route::get('/exportar', [$controller, 'export'])->middleware($guard.':rcpbtn04');
+});
 
 Route::pattern('catalogoCompra', 'tipos-compra|tipos-transaccion');
 

@@ -9,9 +9,8 @@ use Symfony\Component\HttpFoundation\Response;
 
 class EnsureProductParentPermission
 {
-    public function handle(Request $request, Closure $next): Response
+    public function handle(Request $request, Closure $next, string $action = 'prdbtn07'): Response
     {
-        $action = 'prdbtn07';
         $userId = $request->user()?->getAuthIdentifier();
         $allowed = $userId !== null && $request->header('Action-Btn') === $action
             && DB::table('permisos')

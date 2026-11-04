@@ -10,6 +10,8 @@ use App\Http\Requests\Farma\Compras\PurchaseRequest;
 use App\Http\Resources\Farma\PurchaseResource;
 use App\Interfaces\Farma\PurchaseKardexService;
 use App\Interfaces\Farma\PurchaseService;
+use App\Services\Images\ImageStorage;
+use App\Services\Images\InvoiceStorage;
 use App\Utils\Services\Base64UtilityService;
 use DomainException;
 use Illuminate\Database\QueryException;
@@ -70,6 +72,7 @@ class PurchaseController extends Controller
             'id' => (int) $provider->id,
             'nombre' => (string) $provider->nombre,
             'tiene_imagen' => (bool) $provider->tiene_imagen,
+            'imagen_url' => app(ImageStorage::class)->url($provider->imagen_uuid ?? $provider->imagen),
         ]);
 
         return $this->sendResponse($page, 'ok', 200, true);
@@ -78,6 +81,7 @@ class PurchaseController extends Controller
     public function providerImage(int $id): JsonResponse
     {
         $stored = $this->repository->providerImage($id);
+        $stored = app(ImageStorage::class)->base64($stored);
 
         if ($stored === null) {
             return $this->sendError('Imagen del proveedor no encontrada.', null, 404);
@@ -223,6 +227,7 @@ class PurchaseController extends Controller
     public function document(int $id): JsonResponse
     {
         $stored = $this->repository->document($id);
+        $stored = app(InvoiceStorage::class)->base64($stored);
 
         if ($stored === null) {
             return $this->sendError('Documento no encontrado.', null, 404);

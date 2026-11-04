@@ -45,7 +45,7 @@ class PurchaseKardexRepository implements PurchaseKardexService
 
             foreach ($purchase->detalles as $detail) {
                 if ((int) $detail->producto < 1 || (int) $detail->cantidad < 1
-                    || (float) $detail->costo <= 0
+                    || (float) $detail->costo < 0 || ((float) $detail->costo == 0 && ! $detail->es_bonificacion)
                     || trim((string) $detail->lote) === ''
                     || $detail->fecha_elaboracion === null || $detail->fecha_expiracion === null) {
                     throw new DomainException('Todos los productos deben tener lote, fechas, cantidad y costo válidos antes de enviarse al Kardex.');
@@ -60,6 +60,7 @@ class PurchaseKardexRepository implements PurchaseKardexService
                     'cantidad' => (int) $detail->cantidad,
                     'costo' => (float) $detail->costo,
                     'isv' => (bool) $detail->isv,
+                    'es_bonificacion' => (bool) $detail->es_bonificacion,
                     'created_at' => $timestamp,
                     'updated_at' => $timestamp,
                 ];

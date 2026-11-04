@@ -4,7 +4,6 @@ namespace App\Utils\Repositories;
 
 use App\Utils\Services\Base64UtilityService;
 
-use function imagedestroy;
 use function in_array;
 use function is_string;
 use function strlen;
@@ -69,7 +68,7 @@ class Base64UtilityRepository implements Base64UtilityService
         try {
             $sanitized = $this->encodeCleanImage($image, $mimeType);
         } finally {
-            imagedestroy($image);
+            unset($image);
         }
 
         if ($sanitized === null || strlen($sanitized) > self::MAX_IMAGE_BYTES) {

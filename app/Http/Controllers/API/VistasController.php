@@ -6,6 +6,7 @@ use App\DTO\AccionesVistaDTO;
 use App\DTO\VistaDTO;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AccionesVistaRequest;
+use App\Http\Requests\Util\TableSearchRequest;
 use App\Http\Requests\Vista\VistaRequest;
 use App\Http\Requests\Vista\VistaUpdateRequest;
 use App\Http\Resources\ActionsVistasResource;
@@ -14,12 +15,10 @@ use App\Http\Resources\VistaEstadosResource;
 use App\Http\Resources\Vistas\VistasResource;
 use App\Interfaces\Config\AccionesVistaService;
 use App\Interfaces\Config\VistaRepositoryInterface;
-use Illuminate\Container\Attributes\Log;
 use Illuminate\Http\JsonResponse;
 
 class VistasController extends Controller
 {
-
     public function __construct(
         private VistaRepositoryInterface $service,
         private AccionesVistaService $accionesVistaService
@@ -28,12 +27,13 @@ class VistasController extends Controller
     /**
      * Display a listing of the resource.
      */
-    public function index(): JsonResponse
+    public function index(TableSearchRequest $request): JsonResponse
     {
-        $list = $this->service->paginate();
-        if (!$list) {
+        $list = $this->service->searchPage((string) $request->validated('search', ''), ['nombre', 'codigo'], ['Estado' => ['descripcion'], 'Modulo' => ['nombre']]);
+        if (! $list) {
             return $this->sendResponse(null, 'No se encontraron informacion', 404);
         }
+
         return $this->sendResponse(
             VistasResource::collection($list),
             'success',
@@ -58,9 +58,11 @@ class VistasController extends Controller
             if ($vista) {
                 return $this->sendResponse(true, 'Vista creada');
             }
+
             return $this->sendResponse(false, 'No se pudo crear la informacion', 500);
         } catch (\Throwable $e) {
             $this->logError('Error al crear la vista: ', $e);
+
             return $this->sendResponse(false, 'No se pudo crear la informacion', 500);
         }
     }
@@ -71,10 +73,11 @@ class VistasController extends Controller
     public function show(string $id): JsonResponse
     {
         $obj = $this->service->findById($id);
-        if (!$obj) {
+        if (! $obj) {
             return $this->sendResponse(null, 'No se encontro informacion', 404);
         }
-        return $this->sendResponse(VistasResource::make($obj), "success");
+
+        return $this->sendResponse(VistasResource::make($obj), 'success');
     }
 
     /**
@@ -89,9 +92,11 @@ class VistasController extends Controller
             if ($update) {
                 return $this->sendResponse(true, 'Vista actualizada');
             }
+
             return $this->sendResponse(false, 'No se econtro informacion', 500);
         } catch (\Throwable $th) {
             $this->logError('Error al actualizar la vista: ', $th);
+
             return $this->sendResponse(false, 'No se pudo actualizar la informacion', 500);
         }
     }
@@ -102,18 +107,20 @@ class VistasController extends Controller
     public function destroy(string $id): JsonResponse
     {
         $delete = $this->service->delete($id);
-        if (!$delete) {
+        if (! $delete) {
             return $this->sendResponse(false, 'No se pudo eliminar la informacion', 500);
         }
+
         return $this->sendResponse(true, 'Vista eliminada');
     }
 
-    public function findbyModule(string $id): JsonResponse
+    public function findbyModule(TableSearchRequest $request, string $id): JsonResponse
     {
-        $list = $this->service->findByModule($id);
-        if (!$list) {
+        $list = $this->service->findByModule((int) $id, (string) $request->validated('search', ''));
+        if (! $list) {
             return $this->sendResponse(null, 'No se encontraron informacion', 404);
         }
+
         return $this->sendResponse(
             VistasResource::collection($list),
             'success',
@@ -125,9 +132,10 @@ class VistasController extends Controller
     public function estadosList(): JsonResponse
     {
         $list = $this->service->estadosList();
-        if (!$list) {
+        if (! $list) {
             return $this->sendResponse(null, 'No se encontraron informacion', 404);
         }
+
         return $this->sendResponse(
             VistaEstadosResource::collection($list),
             'success',
@@ -135,12 +143,14 @@ class VistasController extends Controller
             false
         );
     }
+
     public function modulosList(): JsonResponse
     {
         $list = $this->service->modulosList();
-        if (!$list) {
+        if (! $list) {
             return $this->sendResponse(null, 'No se encontraron informacion', 404);
         }
+
         return $this->sendResponse(
             ModulosResourceCbx::collection($list),
             'success',
@@ -149,13 +159,13 @@ class VistasController extends Controller
         );
     }
 
-
     public function acctionList($vistaId): JsonResponse
     {
         $list = $this->service->acctionList($vistaId);
-        if (!$list) {
+        if (! $list) {
             return $this->sendResponse(null, 'No se encontraron informacion', 404);
         }
+
         return $this->sendResponse(
             ActionsVistasResource::collection($list),
             'success',
@@ -163,14 +173,17 @@ class VistasController extends Controller
             false
         );
     }
+
     public function deleteAccion($id): JsonResponse
     {
         $delete = $this->service->deleteAccion($id);
-        if (!$delete) {
+        if (! $delete) {
             return $this->sendResponse(false, 'No se pudo eliminar la informacion', 500);
         }
+
         return $this->sendResponse(true, 'Accion eliminada');
     }
+
     public function createAccion(AccionesVistaRequest $request): JsonResponse
     {
         try {
@@ -189,14 +202,15 @@ class VistasController extends Controller
 
             $create = $this->service->createAccion($dto->toArray());
 
-
-            if (!$create) {
+            if (! $create) {
                 return $this->sendResponse(false, 'No se pudo crear la informacion', 500);
             }
+
             return $this->sendResponse(true, 'Accion creada');
         } catch (\Throwable $th) {
             $this->logError('Error al crear la accion de la vista: ', $th);
-            return $this->sendResponse(false, 'No se pudo crear la informacion: ' . $th->getMessage(), 500);
+
+            return $this->sendResponse(false, 'No se pudo crear la informacion: '.$th->getMessage(), 500);
         }
     }
 }

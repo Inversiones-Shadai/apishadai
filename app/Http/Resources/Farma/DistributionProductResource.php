@@ -2,8 +2,10 @@
 
 namespace App\Http\Resources\Farma;
 
+use App\Services\Images\ImageStorage;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Str;
 
 class DistributionProductResource extends JsonResource
 {
@@ -17,6 +19,8 @@ class DistributionProductResource extends JsonResource
             'presentacion' => (string) ($this->productoDetalle?->Familia?->Presentacion?->descripcion ?? ''),
             'administracion' => (string) ($this->productoDetalle?->Familia?->Administracion?->descripcion ?? ''),
             'tiene_imagen' => (bool) ($this->productoDetalle?->tiene_imagen ?? false),
+            'imagen_uuid' => Str::isUuid(($this->productoDetalle?->imagen_uuid ?? $this->productoDetalle?->imagen) ?? '') ? ($this->productoDetalle?->imagen_uuid ?? $this->productoDetalle?->imagen) : null,
+            'imagen_url' => app(ImageStorage::class)->url(($this->productoDetalle?->imagen_uuid ?? $this->productoDetalle?->imagen), 'prdbtn06'),
             'lotes_count' => (int) $this->lotes_count,
             'lotes_configurados' => (int) $this->lotes_configurados,
             'cantidad_total' => (int) $this->cantidad_total,

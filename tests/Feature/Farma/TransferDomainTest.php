@@ -3,6 +3,7 @@
 namespace Tests\Feature\Farma;
 
 use App\Http\Controllers\API\Farma\TransferController;
+use App\Http\Middleware\EnsureTransferConversionPermission;
 use App\Http\Requests\Farma\Transferencias\TransferSendRequest;
 use App\Http\Resources\Farma\TransferResource;
 use App\Interfaces\Config\DeviceInfoService;
@@ -13,20 +14,171 @@ use App\Models\Farma\Transferencia;
 use App\Models\SyncChange;
 use App\Models\User;
 use App\Repositories\Farma\TransferRepository;
+use App\Services\Farma\TransferProductConversion;
 use App\Services\Farma\TransferStockScope;
 use DomainException;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Tests\TestCase;
 
 class TransferDomainTest extends TestCase
 {
+    private function prepareConversion(): array
+    {
+        (require database_path('migrations/2026_10_11_000006_product_parent.php'))->up();
+        (require database_path('migrations/2026_10_24_000002_transfer_product_conversions.php'))->up();
+        Schema::table('lotes', fn (Blueprint $table) => $table->boolean('es_bonificacion')->default(false));
+        Schema::create('distribucion', function (Blueprint $table): void {
+            $table->id();
+            $table->integer('lote');
+            $table->decimal('precio', 10, 2);
+            $table->boolean('isv');
+            foreach (['dto1', 'dto2', 'dto3', 'dto4'] as $field) {
+                $table->decimal($field)->default(0);
+            }
+            $table->timestamps();
+        });
+        DB::table('prod_unidades')->insert(['id' => 2, 'abreviatura_c' => 'BL', 'cantidad_c' => 10, 'abreviatura_v' => 'UND', 'cantidad_v' => 2]);
+        DB::table('productos')->insert(['id' => 2, 'codigo' => 'HIJO', 'descripcion' => 'Producto hijo', 'producto_padre_id' => 1, 'unidad' => 2]);
+        DB::table('lotes')->where('id', 1)->update(['costo' => 120]);
+        DB::table('distribucion')->insert(['lote' => 1, 'precio' => 200, 'isv' => true, 'dto1' => 3, 'dto2' => 5, 'dto3' => 7, 'dto4' => 9]);
+
+        return ['request_id' => (string) Str::uuid(), 'lote_padre' => 1, 'producto_hijo' => 2, 'cantidad' => 2];
+    }
+
+    public function test_conversion_permission_requires_send_and_an_active_individual_grant(): void
+    {
+        $this->seedStockFilterData(false);
+        foreach (['modulo_estados', 'vista_estados'] as $tableName) {
+            Schema::create($tableName, function (Blueprint $table): void {
+                $table->id();
+                $table->string('descripcion');
+            });
+            DB::table($tableName)->insert(['id' => 1, 'descripcion' => 'ACTIVO']);
+        }
+        foreach (['modulos', 'vistas'] as $tableName) {
+            Schema::table($tableName, fn (Blueprint $table) => $table->integer('estado')->default(1));
+        }
+        DB::table('actionsvistas')->insert(['id' => 4, 'vista' => 1, 'codigo' => 'trfbtn04']);
+        $request = $this->stockFilterRequest();
+        $guard = new EnsureTransferConversionPermission;
+        $next = fn () => response()->json(['ok' => true]);
+        foreach (['trfbtn01', 'trfbtn04'] as $code) {
+            $request->headers->set('Action-Btn', $code);
+            try {
+                $guard->handle($request, $next);
+                $this->fail('No debe convertir con permisos de consulta.');
+            } catch (HttpException $exception) {
+                $this->assertSame(403, $exception->getStatusCode());
+            }
+        }
+        DB::table('permisos')->insert(['usuario' => 1, 'modulo' => 1, 'vista' => 1, 'actionvista' => 4]);
+        $this->assertSame(200, $guard->handle($request, $next)->getStatusCode());
+        DB::table('permisos')->where('actionvista', 4)->update(['lifetime' => now()->subMinute()]);
+        $this->expectException(HttpException::class);
+        $guard->handle($request, $next);
+    }
+
+    public function test_conversion_uses_parent_purchase_units_and_preserves_lot_and_commercial_values(): void
+    {
+        $data = $this->prepareConversion();
+        $service = new TransferProductConversion;
+        $options = $service->options(1);
+        $this->assertSame(100, $options['unidades_por_padre']);
+        $this->assertSame(2, $options['hijos'][0]['id']);
+        $result = $service->convert(1, 1, $data);
+        $this->assertSame(200, $result['unidades_generadas']);
+        $this->assertSame(8, (int) Lote::findOrFail(1)->cantidad);
+        $child = Lote::findOrFail($result['lote_hijo']['id']);
+        $this->assertSame(2, $child->producto);
+        $this->assertSame('L-001', $child->lote);
+        $this->assertSame('2028-01-01', $child->fecha_exp->toDateString());
+        $this->assertSame('2026-01-01', $child->fecha_elab->toDateString());
+        $this->assertSame('1.2000', $child->costo);
+        $this->assertTrue($child->isv);
+        $this->assertSame(1, $child->compra);
+        $distribution = Distribucion::where('lote', $child->id)->firstOrFail();
+        $this->assertSame('4.00', $distribution->precio);
+        $this->assertSame('7.00', $distribution->dto3);
+        $this->assertSame('9.00', $distribution->dto4);
+        $this->assertTrue($distribution->isv);
+        $this->assertSame($result, $service->convert(1, 1, $data));
+        $this->assertDatabaseCount('lotes', 2);
+        $this->assertDatabaseCount('transferencia_conversiones', 1);
+        $this->assertSame(8, (int) Lote::findOrFail(1)->cantidad);
+        $transfer = $this->repository()->send(1, 1, ['tipo' => 1, 'stock_para' => 2, 'detalles' => [['lote' => $child->id, 'cantidad' => 200]]]);
+        $this->assertSame(200, $transfer->items);
+        $this->assertSame('240.00', $transfer->subtotal);
+    }
+
+    public function test_conversion_rejects_changed_requests_stock_and_user_without_reapplying(): void
+    {
+        $data = $this->prepareConversion();
+        $service = new TransferProductConversion;
+        $service->convert(1, 1, $data);
+        foreach ([[2, 1, $data], [1, 2, $data], [1, 1, [...$data, 'cantidad' => 3]]] as [$stock, $user, $payload]) {
+            try {
+                $service->convert($stock, $user, $payload);
+                $this->fail('Debe rechazar una solicitud modificada.');
+            } catch (DomainException) {
+                $this->assertSame(8, (int) Lote::findOrFail(1)->cantidad);
+                $this->assertDatabaseCount('lotes', 2);
+            }
+        }
+    }
+
+    public function test_invalid_conversions_leave_stock_unchanged(): void
+    {
+        $data = $this->prepareConversion();
+        $service = new TransferProductConversion;
+        foreach ([['cantidad' => 11], ['producto_hijo' => 1], ['cantidad' => 0]] as $changes) {
+            try {
+                $service->convert(1, 1, [...$data, ...$changes]);
+                $this->fail('Debe rechazar la conversión.');
+            } catch (DomainException) {
+                $this->assertSame(10, (int) Lote::findOrFail(1)->cantidad);
+                $this->assertDatabaseCount('lotes', 1);
+            }
+        }
+        DB::table('lotes')->where('id', 1)->update(['fecha_exp' => '2020-01-01']);
+        $this->expectException(DomainException::class);
+        $service->convert(1, 1, $data);
+    }
+
+    public function test_conversion_rolls_back_all_writes_if_recording_fails(): void
+    {
+        $data = $this->prepareConversion();
+        DB::unprepared("CREATE TRIGGER reject_conversion BEFORE INSERT ON transferencia_conversiones BEGIN SELECT RAISE(ABORT, 'test rollback'); END");
+        try {
+            (new TransferProductConversion)->convert(1, 1, $data);
+            $this->fail('Debe fallar el registro.');
+        } catch (QueryException) {
+            $this->assertSame(10, (int) Lote::findOrFail(1)->cantidad);
+            $this->assertDatabaseCount('lotes', 1);
+            $this->assertDatabaseCount('distribucion', 1);
+            $this->assertDatabaseCount('transferencia_conversiones', 0);
+        }
+    }
+
     private function enableHeadquarters(): void
     {
+        Schema::create('distribucion', function (Blueprint $table): void {
+            $table->id();
+            $table->integer('lote');
+            $table->decimal('precio');
+            $table->boolean('isv');
+            foreach (['dto1', 'dto2', 'dto3', 'dto4'] as $field) {
+                $table->decimal($field)->default(0);
+            }
+            $table->timestamps();
+        });
         Schema::create('principal_activos', fn (Blueprint $table) => $table->id());
         Schema::create('prod_activo', function (Blueprint $table): void {
             $table->id();
@@ -77,16 +229,6 @@ class TransferDomainTest extends TestCase
     public function test_distribution_changes_include_product_lot_data_and_follow_lot_edits(): void
     {
         $this->enableHeadquarters();
-        Schema::create('distribucion', function (Blueprint $table): void {
-            $table->id();
-            $table->integer('lote');
-            $table->decimal('precio');
-            $table->boolean('isv');
-            foreach (['dto1', 'dto2', 'dto3', 'dto4'] as $field) {
-                $table->decimal($field)->default(0);
-            }
-            $table->timestamps();
-        });
         $distribution = Distribucion::create(['lote' => 1, 'precio' => 20, 'isv' => true]);
         $change = SyncChange::where('entity', 'distribucion')->firstOrFail();
         $this->assertSame('distribucion', $change->entity);
@@ -145,7 +287,7 @@ class TransferDomainTest extends TestCase
             'total' => 23,
         ]);
         $this->assertDatabaseHas('lotes', ['id' => 1, 'cantidad' => 8]);
-        $this->assertSame(8, $transfer->detalles->first()->loteDetalle->cantidad);
+        $this->assertSame('8.0000', $transfer->detalles->first()->loteDetalle->cantidad);
     }
 
     public function test_only_another_user_at_the_destination_can_receive_it_once(): void
@@ -194,6 +336,45 @@ class TransferDomainTest extends TestCase
         $this->assertTrue($payload['puede_recibir']);
         $this->assertSame('Emisor', $payload['usuario_envia']['nombre']);
         $this->assertSame('Destino', $payload['stock_para']['descripcion']);
+    }
+
+    public function test_date_range_includes_both_complete_days_and_combines_with_stock_direction_and_search(): void
+    {
+        $transfer = $this->createTransfer();
+        DB::table('transferencias')->where('id', $transfer->id)->update(['enviado_at' => '2026-10-30 23:59:59']);
+        foreach ([50 => '2026-10-31 00:00:00', 51 => '2026-11-01 23:59:59', 52 => '2026-11-02 00:00:00'] as $id => $sentAt) {
+            DB::table('transferencias')->insert(array_replace($transfer->getAttributes(), ['id' => $id, 'enviado_at' => $sentAt]));
+        }
+        $filters = ['fecha_desde' => '2026-10-31', 'fecha_hasta' => '2026-11-01', 'direccion' => 'enviadas', 'tipo' => 1, 'search' => 'Destino'];
+        $page = $this->repository()->paginate(1, 1, $filters);
+        $this->assertSame(2, $page->total());
+        $this->assertSame(51, $page->items()[0]->id);
+        $this->assertSame(0, $this->repository()->paginate(2, 30, $filters)->total());
+        $this->assertSame(1, $this->repository()->paginate(1, 30, ['fecha_desde' => '2026-10-31', 'fecha_hasta' => '2026-10-31'])->total());
+        $this->assertSame(4, $this->repository()->paginate(1)->total());
+    }
+
+    public function test_transfer_api_accepts_date_ranges_and_rejects_reversed_or_invalid_dates(): void
+    {
+        $transfer = $this->createTransfer();
+        DB::table('transferencias')->where('id', $transfer->id)->update(['enviado_at' => '2026-10-31 23:59:59']);
+        $deviceInfo = \Mockery::mock(DeviceInfoService::class);
+        $deviceInfo->shouldReceive('stockId')->andReturn(1);
+        $controller = new TransferController($this->repository(), $deviceInfo);
+        foreach ([['fecha_desde' => '2026-10-31', 'fecha_hasta' => '2026-10-31'], ['fecha_desde' => '2026-11-01', 'fecha_hasta' => '2026-11-02']] as $index => $filters) {
+            $request = Request::create('/api/farma/transferencias/listar', 'GET', $filters);
+            $this->app->instance('request', $request);
+            $this->assertSame($index === 0 ? 1 : 0, $controller->index($request)->getData(true)['meta']['total']);
+        }
+        foreach ([['fecha_desde' => '2026-11-01', 'fecha_hasta' => '2026-10-31'], ['fecha_desde' => '2026-02-31']] as $filters) {
+            $request = Request::create('/api/farma/transferencias/listar', 'GET', $filters);
+            try {
+                $controller->index($request);
+                $this->fail('El rango inválido no debe consultar transferencias.');
+            } catch (ValidationException $exception) {
+                $this->assertNotEmpty($exception->errors());
+            }
+        }
     }
 
     public function test_default_stock_scope_excludes_unrelated_transfers_even_for_a_privileged_user(): void

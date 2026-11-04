@@ -24,10 +24,12 @@ class LatestPurchaseCostTest extends TestCase
             $table->string('estado');
         });
         Schema::create('compra_detalle', function (Blueprint $table): void {
+            $table->boolean('es_bonificacion')->default(false);
             $table->id();
             $table->integer('producto');
             $table->integer('compra');
             $table->decimal('costo', 10, 2);
+            $table->index(['producto', 'es_bonificacion', 'compra', 'id', 'costo'], 'compra_detalle_producto_bonificacion_costo_index');
         });
         $migration = require database_path('migrations/2026_10_07_000006_index_purchase_detail_latest_cost.php');
         $migration->up();
@@ -82,6 +84,12 @@ class LatestPurchaseCostTest extends TestCase
         }
     }
 
+    public function test_bonus_cost_does_not_replace_the_last_normal_purchase_cost(): void
+    {
+        DB::table('compra_detalle')->insert(['id' => 10, 'producto' => 1, 'compra' => 2, 'costo' => 100, 'es_bonificacion' => true]);
+        $this->assertSame('25.35', (new PurchaseRepository(new Compra))->latestCosts([1])[0]['costo']);
+    }
+
     public function test_large_history_uses_one_query_and_the_covering_index_without_a_sort(): void
     {
         DB::table('compra_detalle')->delete();
@@ -108,7 +116,7 @@ class LatestPurchaseCostTest extends TestCase
         $this->assertCount(1, $queries);
         $this->assertSame(['50.25'], array_values(array_unique(array_column($costs, 'costo'))));
         $plan = json_encode(DB::select('EXPLAIN QUERY PLAN '.$queries[0]['query'], $queries[0]['bindings']), JSON_THROW_ON_ERROR);
-        $this->assertStringContainsString('COVERING INDEX compra_detalle_producto_compra_costo_index', $plan);
+        $this->assertStringContainsString('COVERING INDEX compra_detalle_producto_bonificacion_costo_index', $plan);
         $this->assertStringNotContainsString('USE TEMP B-TREE', $plan);
     }
 

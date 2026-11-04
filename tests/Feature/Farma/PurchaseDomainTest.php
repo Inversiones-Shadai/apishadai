@@ -4,6 +4,7 @@ namespace Tests\Feature\Farma;
 
 use App\DTO\Farma\PurchaseData;
 use App\Http\Controllers\API\Farma\Compras\PurchaseCatalogController;
+use App\Http\Controllers\API\Farma\Compras\PurchaseReportController;
 use App\Http\Requests\Farma\Compras\PurchaseRequest;
 use App\Http\Requests\Farma\Compras\PurchaseTransactionRequest;
 use App\Http\Resources\Farma\PurchaseDetailResource;
@@ -40,6 +41,111 @@ class PurchaseDomainTest extends TestCase
         parent::tearDown();
     }
 
+    public function test_purchase_export_filters_use_a_cursor_and_include_every_payment_without_documents(): void
+    {
+        DB::table('compra_tipo')->insert(['int' => 2, 'descripcion' => 'Crédito']);
+        DB::table('proveedores')->insert(['id' => 2, 'nombre' => 'Otro proveedor']);
+        foreach (range(1, 103) as $id) {
+            DB::table('compras')->insert(['id' => $id, 'tipo' => $id === 103 ? 1 : 2, 'proveedor' => $id === 102 ? 2 : 1,
+                'usuario' => 1, 'plazo' => 30, 'nro' => 'EXPORT-'.$id, 'items' => 1, 'subtotal' => 100, 'isv' => 15, 'total' => 115]);
+        }
+        foreach (range(1, 18) as $id) {
+            DB::table('compra_transc')->insert(['nro' => 'AB-'.$id, 'compra' => 1, 'tipo' => 2, 'valor' => 1, 'img' => 'private-document']);
+        }
+        $controller = new PurchaseReportController(new PurchaseRepository(new Compra));
+        $filters = ['tipo' => 2, 'proveedor' => 1, 'search' => 'EXPORT-'];
+        $response = $controller->export(Request::create('/', 'GET', $filters))->getData(true)['data'];
+        $this->assertCount(100, $response['items']);
+        $this->assertSame(101, $response['items'][0]['id']);
+        $this->assertSame(2, $response['next_cursor']);
+        $response = $controller->export(Request::create('/', 'GET', [...$filters, 'antes_de' => 2]))->getData(true)['data'];
+        $this->assertCount(1, $response['items']);
+        $this->assertNull($response['next_cursor']);
+        $this->assertSame(1, $response['items'][0]['id']);
+        $this->assertCount(18, $response['items'][0]['pagos']);
+        foreach ($response['items'][0]['pagos'] as $payment) {
+            $this->assertSame(1, $payment['compra_id']);
+            $this->assertArrayNotHasKey('img', $payment);
+        }
+        $empty = $controller->export(Request::create('/', 'GET', ['search' => 'not-found']))->getData(true)['data'];
+        $this->assertSame([], $empty['items']);
+        $this->assertNull($empty['next_cursor']);
+        $this->assertSame(422, $controller->export(Request::create('/', 'GET', ['antes_de' => 0]))->getStatusCode());
+    }
+
+    public function test_purchase_report_payments_are_scoped_and_keep_global_invoice_totals_across_pages(): void
+    {
+        foreach ([1, 2] as $id) {
+            DB::table('compras')->insert(['id' => $id, 'tipo' => 1, 'proveedor' => 1, 'usuario' => 1, 'plazo' => 0,
+                'nro' => 'PAY-'.$id, 'items' => 1, 'subtotal' => 100, 'isv' => 15, 'total' => 115]);
+        }
+        foreach (range(1, 16) as $id) {
+            DB::table('compra_transc')->insert(['nro' => 'PAYMENT-'.$id, 'compra' => 1, 'tipo' => 2, 'valor' => 0.50]);
+        }
+        DB::table('compra_transc')->insert(['nro' => 'OTHER', 'compra' => 2, 'tipo' => 1, 'valor' => 115]);
+        $controller = new PurchaseReportController(new PurchaseRepository(new Compra));
+        $transactions = new PurchaseTransactionRepository(new CompraTransaccion);
+        foreach ([1 => 15, 2 => 1] as $number => $count) {
+            $request = Request::create('/api/farma/reporte-compras/pagos/1', 'GET', ['page' => $number]);
+            $this->app->instance('request', $request);
+            $response = $controller->payments($request, 1, $transactions)->getData(true);
+            $this->assertCount($count, $response['data']['items']);
+            $this->assertSame(16, $response['data']['meta']['total']);
+            $this->assertSame($number, $response['data']['meta']['current_page']);
+            $this->assertEquals(8, $response['data']['purchase']['total_aplicado']);
+            $this->assertEquals(107, $response['data']['purchase']['saldo']);
+            foreach ($response['data']['items'] as $item) {
+                $this->assertSame(1, $item['compra_id']);
+                $this->assertArrayNotHasKey('img', $item);
+            }
+        }
+        $this->assertSame(404, $controller->payments(Request::create('/'), 999, $transactions)->getStatusCode());
+        $this->assertSame(422, $controller->payments(Request::create('/', 'GET', ['page' => 0]), 1, $transactions)->getStatusCode());
+    }
+
+    public function test_purchase_report_totals_cover_all_filtered_pages_without_multiplying_invoices(): void
+    {
+        DB::table('compra_tipo')->insert(['int' => 2, 'descripcion' => 'Crédito']);
+        DB::table('proveedores')->insert(['id' => 2, 'nombre' => 'Otro proveedor']);
+        foreach ([1 => [1, 2], 2 => [1, 2], 3 => [2, 2], 4 => [1, 1]] as $id => [$provider, $type]) {
+            DB::table('compras')->insert([
+                'id' => $id, 'tipo' => $type, 'proveedor' => $provider, 'usuario' => 1,
+                'plazo' => 30, 'nro' => 'REP-'.$id, 'items' => 1, 'subtotal' => 100.10,
+                'isv' => 15.02, 'descuento' => 5.01, 'total' => 110.11, 'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+        foreach ([[1, 2, 10.25], [1, 2, 20.50], [1, 3, 5], [2, 2, 7.25], [3, 2, 80], [4, 1, 110.11]] as [$purchase, $type, $value]) {
+            DB::table('compra_transc')->insert(['compra' => $purchase, 'tipo' => $type, 'valor' => $value]);
+        }
+        $repository = new PurchaseRepository(new Compra);
+        $report = $repository->report(1, '', 1, 2);
+        $this->assertSame(2, $report['purchases']->total());
+        $this->assertCount(1, $report['purchases']);
+        $this->assertSame([
+            'subtotal' => 200.20, 'isv' => 30.04, 'descuento' => 10.02,
+            'total' => 220.22, 'saldo_pendiente' => 177.22, 'gran_total' => 220.22, 'abonos' => 38.0,
+        ], $report['totals']);
+        $row = PurchaseResource::make($report['purchases']->items()[0])->resolve(request());
+        $this->assertSame(7.25, $row['total_abonos']);
+        $this->assertSame(102.86, $row['saldo']);
+        $this->assertArrayNotHasKey('detalles', $row);
+        $this->assertArrayNotHasKey('img', $row);
+        $this->assertSame(330.33, $repository->report(1, '', null, 2)['totals']['total']);
+        $this->assertSame(118.0, $repository->report(1, '', null, 2)['totals']['abonos']);
+        $cash = $repository->report(1, '', null, 1);
+        $this->assertSame(1, $cash['purchases']->total());
+        $this->assertSame(0.0, $cash['totals']['abonos']);
+        $this->assertSame(0.0, $cash['totals']['saldo_pendiente']);
+        DB::table('compra_transc')->insert(['compra' => 3, 'tipo' => 3, 'valor' => 40]);
+        $this->assertSame(177.22, $repository->report(1, '', null, 2)['totals']['saldo_pendiente']);
+        $this->assertSame(110.11, $repository->report(1, 'REP-1', 1, 2)['totals']['total']);
+        $empty = $repository->report(1, 'inexistente', 1, 2);
+        $this->assertSame(0, $empty['purchases']->total());
+        $this->assertSame(0.0, $empty['totals']['gran_total']);
+        $this->assertSame(0.0, $empty['totals']['abonos']);
+        $this->assertSame(0.0, $empty['totals']['saldo_pendiente']);
+    }
+
     public function test_purchase_repository_calculates_totals_and_hides_documents(): void
     {
         $dto = PurchaseData::fromValidated([
@@ -61,6 +167,7 @@ class PurchaseDomainTest extends TestCase
         $this->assertSame('38.00', $purchase->detalles->last()->total);
 
         $payload = PurchaseResource::make($purchase)->resolve(request());
+        $this->assertArrayNotHasKey('en_escala', $payload);
         $detailPayload = PurchaseDetailResource::make($purchase->detalles->first())->resolve(request());
         $this->assertSame(143.06, $payload['saldo']);
         $this->assertSame(12.0, $payload['descuento']);
@@ -192,6 +299,52 @@ class PurchaseDomainTest extends TestCase
         $this->expectException(DomainException::class);
         $this->expectExceptionMessage('ya fue enviada al Kardex');
         $kardex->send($purchase->id, 1);
+    }
+
+    public function test_paid_and_bonus_lines_of_the_same_product_keep_separate_lots_and_values(): void
+    {
+        $line = ['producto' => 1, 'cantidad' => 10, 'lote' => 'MISMO-LOTE', 'fecha_elaboracion' => '2026-01-01',
+            'fecha_expiracion' => '2028-01-01', 'costo' => 50, 'isv' => false, 'descuento' => 0, 'es_bonificacion' => false];
+        $payload = ['tipo' => 1, 'proveedor' => 1, 'plazo' => 30, 'nro' => 'BONUS-001',
+            'detalles' => [$line, [...$line, 'cantidad' => 2, 'costo' => 0, 'es_bonificacion' => true]]];
+        $request = PurchaseRequest::create('/api/farma/compras/crear', 'POST', $payload);
+        $validator = Validator::make($payload, $request->rules(), $request->messages());
+        $request->withValidator($validator);
+        $this->assertFalse($validator->fails(), $validator->errors()->toJson());
+        $dto = PurchaseData::fromValidated($validator->validated());
+        $repository = new PurchaseRepository(new Compra);
+        $purchase = $repository->create($dto->header(1), $dto->detailRows());
+        $this->assertSame('500.00', $purchase->total);
+        $this->assertSame([false, true], $purchase->detalles->pluck('es_bonificacion')->all());
+        $detail = PurchaseDetailResource::make($purchase->detalles->last())->resolve(request());
+        $this->assertTrue($detail['es_bonificacion']);
+        $this->assertSame(0.0, $detail['total']);
+        (new PurchaseKardexRepository(new Compra, $repository))->send($purchase->id, 1);
+        $this->assertDatabaseHas('lotes', ['compra' => $purchase->id, 'producto' => 1, 'lote' => 'MISMO-LOTE', 'cantidad' => 10, 'es_bonificacion' => false]);
+        $this->assertDatabaseHas('lotes', ['compra' => $purchase->id, 'producto' => 1, 'lote' => 'MISMO-LOTE', 'cantidad' => 2, 'es_bonificacion' => true, 'costo' => 0]);
+
+        $payload['nro'] = 'BONUS-002';
+        $payload['detalles'][1]['es_bonificacion'] = false;
+        $request = PurchaseRequest::create('/api/farma/compras/crear', 'POST', $payload);
+        $validator = Validator::make($payload, $request->rules());
+        $request->withValidator($validator);
+        $this->assertTrue($validator->fails());
+        $this->assertTrue($validator->errors()->has('detalles.1.costo'));
+    }
+
+    public function test_draft_keeps_bonus_status_when_lines_are_added_updated_and_finalized(): void
+    {
+        $repository = new PurchaseRepository(new Compra);
+        $purchase = $repository->createDraft(['tipo' => 1, 'proveedor' => 1, 'usuario' => 1, 'plazo' => 0, 'nro' => 'BONUS-DRAFT']);
+        $line = ['producto' => 1, 'cantidad' => 2, 'lote' => 'BONUS', 'fecha_elaboracion' => '2026-01-01',
+            'fecha_expiracion' => '2028-01-01', 'costo' => 0, 'isv' => false, 'descuento' => 0, 'es_bonificacion' => true];
+        $purchase = $repository->syncDetail($purchase->id, $line);
+        $this->assertTrue($purchase->detalles->first()->es_bonificacion);
+        $purchase = $repository->syncDetail($purchase->id, [...$line, 'id' => $purchase->detalles->first()->id, 'cantidad' => 3]);
+        $this->assertSame(3, $purchase->detalles->first()->cantidad);
+        $purchase = $repository->finalize($purchase->id);
+        $this->assertTrue($purchase->detalles->first()->es_bonificacion);
+        $this->assertSame('0.00', $purchase->total);
     }
 
     public function test_purchase_request_rejects_a_discount_above_the_line_total(): void
@@ -451,6 +604,7 @@ class PurchaseDomainTest extends TestCase
             $table->integer('proveedor');
             $table->unsignedBigInteger('usuario');
             $table->integer('plazo');
+            $table->boolean('en_escala')->nullable();
             $table->string('nro');
             $table->integer('items');
             $table->decimal('isv', 10, 2);
@@ -466,6 +620,7 @@ class PurchaseDomainTest extends TestCase
         });
         Schema::create('compra_detalle', function (Blueprint $table): void {
             $table->id();
+            $table->boolean('es_bonificacion')->default(false);
             $table->integer('compra');
             $table->integer('producto');
             $table->integer('cantidad');
@@ -489,6 +644,7 @@ class PurchaseDomainTest extends TestCase
         });
         Schema::create('lotes', function (Blueprint $table): void {
             $table->id();
+            $table->boolean('es_bonificacion')->default(false);
             $table->integer('compra')->nullable();
             $table->integer('producto');
             $table->string('lote', 100);

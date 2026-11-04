@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\Farma;
 
+use App\Services\Images\InvoiceStorage;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -16,6 +17,7 @@ class PurchaseTransactionResource extends JsonResource
             'tipo_id' => (int) $this->tipo,
             'valor' => (float) $this->valor,
             'tiene_documento' => (bool) ($this->tiene_documento ?? false),
+            'documento_url' => app(InvoiceStorage::class)->url($this->img, 'ctrbtn06'),
             'compra' => $this->whenLoaded('compraDetalle', fn (): array => [
                 'id' => (int) $this->compraDetalle->id,
                 'nro' => (string) $this->compraDetalle->nro,

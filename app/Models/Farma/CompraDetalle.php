@@ -9,7 +9,7 @@ class CompraDetalle extends Model
 {
     protected $table = 'compra_detalle';
 
-    protected $fillable = ['compra', 'producto', 'cantidad', 'lote', 'fecha_elaboracion', 'fecha_expiracion', 'costo', 'isv', 'descuento', 'total'];
+    protected $fillable = ['compra', 'producto', 'cantidad', 'lote', 'fecha_elaboracion', 'fecha_expiracion', 'costo', 'isv', 'descuento', 'total', 'es_bonificacion'];
 
     protected function casts(): array
     {
@@ -17,6 +17,7 @@ class CompraDetalle extends Model
             'compra' => 'integer',
             'producto' => 'integer',
             'cantidad' => 'integer',
+            'es_bonificacion' => 'boolean',
             'fecha_elaboracion' => 'date:Y-m-d',
             'fecha_expiracion' => 'date:Y-m-d',
             'costo' => 'decimal:2',

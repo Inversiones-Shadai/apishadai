@@ -5,6 +5,7 @@ namespace App\Repositories\Proveedores;
 use App\Interfaces\Proveedores\ProveedoresService;
 use App\Models\Proveedores;
 use App\Repositories\Repository;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
 
 class ProveedoresRepository extends Repository implements ProveedoresService
@@ -20,12 +21,16 @@ class ProveedoresRepository extends Repository implements ProveedoresService
 
     public function paginate(): LengthAwarePaginator
     {
-        return $this->model
-            ->newQuery()
-            ->select(['id', 'nombre', 'telefono', 'direccion', 'created_at', 'updated_at'])
-            ->selectRaw('imagen IS NOT NULL AS tiene_imagen')
+        return $this->buildBaseQuery()
             ->orderByDesc('id')
             ->paginate($this->perPage);
+    }
+
+    protected function buildBaseQuery(): Builder
+    {
+        return parent::buildBaseQuery()
+            ->select(['id', 'nombre', 'telefono', 'direccion', 'created_at', 'updated_at'])
+            ->selectRaw('imagen IS NOT NULL AND imagen <> \'\' AS tiene_imagen, CASE WHEN LENGTH(imagen) = 36 THEN imagen ELSE NULL END AS imagen_uuid');
     }
 
     /**
@@ -70,12 +75,6 @@ class ProveedoresRepository extends Repository implements ProveedoresService
     public function getImage(int $id)
     {
 
-        $proveedor = $this->findById($id);
-
-        if (! $proveedor) {
-            return null;
-        }
-
-        return $proveedor->imagen;
+        return $this->model->newQuery()->whereKey($id)->value('imagen');
     }
 }

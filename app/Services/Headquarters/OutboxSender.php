@@ -43,7 +43,7 @@ class OutboxSender
                     $change = SyncChange::findOrFail($row->sync_change_id);
                     $payload = $this->serialize($change);
                     $size = strlen(json_encode($payload, JSON_THROW_ON_ERROR));
-                    if ($rows->isNotEmpty() && $bytes + $size > 7 * 1024 * 1024) {
+                    if ($rows->isNotEmpty() && $bytes + $size > 1024 * 1024) {
                         break;
                     }
                     $row->change = $payload;

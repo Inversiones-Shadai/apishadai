@@ -9,8 +9,10 @@ use App\Models\Farma\CompraDetalle;
 use App\Models\Farma\CompraTipo;
 use App\Models\Farma\Producto;
 use App\Models\Proveedores;
+use App\Services\Images\ImageStorage;
 use DomainException;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 
@@ -18,7 +20,7 @@ class PurchaseRepository implements PurchaseService
 {
     private const RELATIONS = [
         'tipoDetalle',
-        'proveedorDetalle:id,nombre',
+        'proveedorDetalle:id,nombre,imagen',
         'usuarioDetalle:id,nombre,name',
         'kardexUsuarioDetalle:id,nombre,name',
         'detalles.productoDetalle.unidadDetalle',
@@ -31,6 +33,49 @@ class PurchaseRepository implements PurchaseService
 
     public function paginate(int $perPage = 30, string $search = ''): LengthAwarePaginator
     {
+        return $this->filteredQuery($search)->orderByDesc('id')->paginate(max(1, min($perPage, 100)));
+    }
+
+    public function report(int $perPage = 30, string $search = '', ?int $provider = null, ?int $type = null): array
+    {
+        $query = $this->filteredQuery($search)
+            ->when($provider !== null, fn (Builder $query) => $query->where('compras.proveedor', $provider))
+            ->when($type !== null, fn (Builder $query) => $query->where('compras.tipo', $type));
+        $ids = (clone $query)->select('compras.id')->toBase();
+        $payments = DB::table('compra_transc')->select('compra')
+            ->selectRaw('SUM(valor) AS aplicado')->whereIn('compra', $ids)->groupBy('compra');
+        $totals = (array) DB::table('compras')
+            ->leftJoinSub($payments, 'pagos', 'pagos.compra', '=', 'compras.id')
+            ->whereIn('compras.id', $ids)
+            ->selectRaw('COALESCE(SUM(subtotal), 0) AS subtotal, COALESCE(SUM(isv), 0) AS isv, COALESCE(SUM(descuento), 0) AS descuento, COALESCE(SUM(total), 0) AS total')
+            ->selectRaw('COALESCE(SUM(CASE WHEN total > COALESCE(pagos.aplicado, 0) THEN total - COALESCE(pagos.aplicado, 0) ELSE 0 END), 0) AS saldo_pendiente')
+            ->first();
+        $totals = array_map(static fn ($value): float => round((float) $value, 2), $totals);
+        $totals['gran_total'] = $totals['total'];
+        $totals['abonos'] = round((float) DB::table('compra_transc')->where('tipo', 2)->whereIn('compra', $ids)->sum('valor'), 2);
+
+        // The report needs invoice headers only, never product details or scanned documents.
+        $query->setEagerLoads([])->with(['tipoDetalle', 'proveedorDetalle:id,nombre'])
+            ->withSum(['transacciones as total_abonos' => fn (Builder $transactions) => $transactions->where('tipo', 2)], 'valor');
+
+        return ['purchases' => $query->orderByDesc('id')->paginate(max(1, min($perPage, 100))), 'totals' => $totals];
+    }
+
+    public function exportPage(string $search = '', ?int $provider = null, ?int $type = null, ?int $before = null): Collection
+    {
+        return $this->filteredQuery($search)
+            ->when($provider !== null, fn (Builder $query) => $query->where('compras.proveedor', $provider))
+            ->when($type !== null, fn (Builder $query) => $query->where('compras.tipo', $type))
+            ->when($before !== null, fn (Builder $query) => $query->where('compras.id', '<', $before))
+            ->setEagerLoads([])->with([
+                'tipoDetalle', 'proveedorDetalle:id,nombre',
+                'transacciones' => fn ($query) => $query->select(['id', 'compra', 'tipo', 'nro', 'valor', 'created_at'])
+                    ->with('tipoDetalle:id,descripcion')->orderBy('id'),
+            ])->orderByDesc('compras.id')->limit(100)->get();
+    }
+
+    private function filteredQuery(string $search): Builder
+    {
         $query = $this->baseQuery();
         $search = trim($search);
 
@@ -38,16 +83,16 @@ class PurchaseRepository implements PurchaseService
             $like = "%{$search}%";
 
             $query->where(function (Builder $filter) use ($search, $like): void {
-                $filter->where('compras.nro', 'like', $like)
-                    ->orWhere('compras.estado', 'like', $like)
-                    ->orWhere('compras.nota', 'like', $like)
-                    ->orWhereHas('proveedorDetalle', fn (Builder $provider): Builder => $provider->where('nombre', 'like', $like))
-                    ->orWhereHas('tipoDetalle', fn (Builder $type): Builder => $type->where('descripcion', 'like', $like))
+                $filter->whereRaw('LOWER(compras.nro) LIKE ?', [mb_strtolower($like)])
+                    ->orWhereRaw('LOWER(compras.estado) LIKE ?', [mb_strtolower($like)])
+                    ->orWhereRaw('LOWER(compras.nota) LIKE ?', [mb_strtolower($like)])
+                    ->orWhereHas('proveedorDetalle', fn (Builder $provider): Builder => $provider->whereRaw('LOWER(nombre) LIKE ?', [mb_strtolower($like)]))
+                    ->orWhereHas('tipoDetalle', fn (Builder $type): Builder => $type->whereRaw('LOWER(descripcion) LIKE ?', [mb_strtolower($like)]))
                     ->orWhereHas('usuarioDetalle', fn (Builder $user): Builder => $user
-                        ->where('nombre', 'like', $like)
-                        ->orWhere('name', 'like', $like))
-                    ->orWhereHas('detalles', fn (Builder $detail): Builder => $detail->where('lote', 'like', $like))
-                    ->orWhereHas('detalles.productoDetalle', fn (Builder $product): Builder => $product->where('descripcion', 'like', $like));
+                        ->whereRaw('LOWER(nombre) LIKE ?', [mb_strtolower($like)])
+                        ->orWhereRaw('LOWER(name) LIKE ?', [mb_strtolower($like)]))
+                    ->orWhereHas('detalles', fn (Builder $detail): Builder => $detail->whereRaw('LOWER(lote) LIKE ?', [mb_strtolower($like)]))
+                    ->orWhereHas('detalles.productoDetalle', fn (Builder $product): Builder => $product->whereRaw('LOWER(descripcion) LIKE ?', [mb_strtolower($like)]));
 
                 if (is_numeric($search)) {
                     $amount = (float) $search;
@@ -63,7 +108,7 @@ class PurchaseRepository implements PurchaseService
             });
         }
 
-        return $query->orderByDesc('id')->paginate(max(1, min($perPage, 100)));
+        return $query;
     }
 
     public function find(int $id): ?Compra
@@ -181,9 +226,9 @@ class PurchaseRepository implements PurchaseService
             }
 
             foreach ($purchase->detalles as $detail) {
-                if ((float) $detail->costo <= 0 || trim((string) $detail->lote) === ''
+                if ((float) $detail->costo < 0 || ((float) $detail->costo == 0 && ! $detail->es_bonificacion) || trim((string) $detail->lote) === ''
                     || $detail->fecha_elaboracion === null || $detail->fecha_expiracion === null) {
-                    throw new DomainException('Todos los productos deben tener lote, fechas de elaboración y expiración, y un costo mayor que cero.');
+                    throw new DomainException('Todos los productos deben tener lote, fechas y costo válido. Sólo las bonificaciones pueden tener costo cero.');
                 }
 
                 if ($detail->fecha_expiracion->lt($detail->fecha_elaboracion)) {
@@ -274,6 +319,7 @@ class PurchaseRepository implements PurchaseService
             $cost = DB::table('compra_detalle as detail')
                 ->select('detail.costo')
                 ->where('detail.producto', $id)
+                ->where('detail.es_bonificacion', false)
                 ->where('detail.costo', '>', 0)
                 ->when($excludePurchase !== null, fn ($detail) => $detail->where('detail.compra', '<>', $excludePurchase))
                 ->where(fn ($purchase) => $purchase->select('estado')->from('compras')
@@ -310,13 +356,14 @@ class PurchaseRepository implements PurchaseService
             ...$types,
             'proveedores' => Proveedores::query()
                 ->select(['id', 'nombre'])
-                ->selectRaw('imagen IS NOT NULL AS tiene_imagen')
+                ->selectRaw('imagen IS NOT NULL AND imagen <> \'\' AS tiene_imagen, CASE WHEN LENGTH(imagen) = 36 THEN imagen ELSE NULL END AS imagen_uuid')
                 ->orderBy('nombre')
                 ->get()
                 ->map(fn (Proveedores $provider): array => [
                     'id' => (int) $provider->id,
                     'label' => (string) $provider->nombre,
                     'tiene_imagen' => (bool) $provider->tiene_imagen,
+                    'imagen_url' => app(ImageStorage::class)->url($provider->imagen_uuid ?? $provider->imagen),
                 ])->all(),
             'productos' => Producto::query()
                 ->with(['unidadDetalle', 'Familia.Presentacion', 'laboratorioDetalle'])
@@ -337,7 +384,7 @@ class PurchaseRepository implements PurchaseService
     {
         $query = Proveedores::query()
             ->select(['id', 'nombre'])
-            ->selectRaw('imagen IS NOT NULL AS tiene_imagen');
+            ->selectRaw('imagen IS NOT NULL AND imagen <> \'\' AS tiene_imagen, CASE WHEN LENGTH(imagen) = 36 THEN imagen ELSE NULL END AS imagen_uuid');
 
         if (trim($search) !== '') {
             $query->where('nombre', 'like', '%'.trim($search).'%');
@@ -350,7 +397,7 @@ class PurchaseRepository implements PurchaseService
     {
         return $this->model->newQuery()
             ->select(['id', 'tipo', 'proveedor', 'usuario', 'plazo', 'nro', 'items', 'isv', 'subtotal', 'descuento', 'total', 'estado', 'nota', 'kardex_enviado_at', 'kardex_usuario', 'created_at', 'updated_at'])
-            ->selectRaw('img IS NOT NULL AS tiene_documento')
+            ->selectRaw('img IS NOT NULL AS tiene_documento, CASE WHEN LENGTH(img) = 36 THEN img ELSE NULL END AS img')
             ->with(self::RELATIONS)
             ->withSum('transacciones as total_aplicado', 'valor');
     }

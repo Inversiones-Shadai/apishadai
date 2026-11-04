@@ -26,6 +26,8 @@ class SorteosRptRepository implements SorteosRptService
     #[\Override]
     public function filterClientes(FilterModel $filter)
     {
+        $this->clientesService->setPerPage(10);
+
         return $this->clientesService->filterAll($filter, true);
     }
 
@@ -35,6 +37,8 @@ class SorteosRptRepository implements SorteosRptService
     #[\Override]
     public function filterSorteos(FilterModel $filter)
     {
+        $this->promocionesService->setPerPage(10);
+
         return $this->promocionesService->filterAll($filter, true);
     }
 
@@ -44,6 +48,8 @@ class SorteosRptRepository implements SorteosRptService
     #[\Override]
     public function filterStocks(FilterModel $filter)
     {
+        $this->stocksService->setPerPage(10);
+
         return $this->stocksService->filterAll($filter, true);
     }
 
@@ -62,6 +68,8 @@ class SorteosRptRepository implements SorteosRptService
     #[\Override]
     public function filterUsuarios(FilterModel $filter)
     {
+        $this->userService->setPerPage(10);
+
         return $this->userService->filterAll($filter, true);
     }
 
@@ -71,6 +79,8 @@ class SorteosRptRepository implements SorteosRptService
     #[\Override]
     public function getClientesList()
     {
+        $this->clientesService->setPerPage(10);
+
         return $this->clientesService->paginate();
     }
 
@@ -80,6 +90,8 @@ class SorteosRptRepository implements SorteosRptService
     #[\Override]
     public function getSorteosList()
     {
+        $this->promocionesService->setPerPage(10);
+
         return $this->promocionesService->paginate();
     }
 
@@ -89,6 +101,8 @@ class SorteosRptRepository implements SorteosRptService
     #[\Override]
     public function getStocksList()
     {
+        $this->stocksService->setPerPage(10);
+
         return $this->stocksService->paginate();
     }
 
@@ -98,6 +112,8 @@ class SorteosRptRepository implements SorteosRptService
     #[\Override]
     public function getUsuariosList()
     {
+        $this->userService->setPerPage(10);
+
         return $this->userService->paginate();
     }
 }

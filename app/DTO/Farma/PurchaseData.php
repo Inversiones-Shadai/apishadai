@@ -27,6 +27,7 @@ class PurchaseData
             img: isset($validated['img']) ? trim((string) $validated['img']) : null,
             detalles: array_map(static fn (array $detail): array => [
                 'producto' => (int) $detail['producto'],
+                'es_bonificacion' => (bool) ($detail['es_bonificacion'] ?? false),
                 'cantidad' => (int) $detail['cantidad'],
                 'lote' => self::text((string) $detail['lote']),
                 'fecha_elaboracion' => (string) $detail['fecha_elaboracion'],

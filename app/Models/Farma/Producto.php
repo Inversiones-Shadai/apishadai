@@ -3,6 +3,7 @@
 namespace App\Models\Farma;
 
 use App\Models\Concerns\PublishesHeadquarters;
+use App\Models\Concerns\StoresImageUuid;
 use App\Models\Laboratorio;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -12,6 +13,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Producto extends Model
 {
     use PublishesHeadquarters;
+    use StoresImageUuid;
 
     protected $table = 'productos';
 

@@ -6,6 +6,7 @@ use App\Interfaces\Farma\PurchaseTransactionService;
 use App\Models\Farma\Compra;
 use App\Models\Farma\CompraTransaccion;
 use App\Models\Farma\TransaccionTipo;
+use App\Support\TableSearch;
 use DomainException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -16,9 +17,11 @@ class PurchaseTransactionRepository implements PurchaseTransactionService
 {
     public function __construct(private readonly CompraTransaccion $model) {}
 
-    public function paginate(int $perPage = 30, ?int $purchaseId = null): LengthAwarePaginator
+    public function paginate(int $perPage = 30, ?int $purchaseId = null, string $search = ''): LengthAwarePaginator
     {
-        return $this->baseQuery()
+        return TableSearch::apply($this->baseQuery(), $search, ['nro', 'valor'], [
+            'compraDetalle' => ['nro'], 'compraDetalle.proveedorDetalle' => ['nombre'], 'tipoDetalle' => ['descripcion'],
+        ])
             ->when($purchaseId !== null, fn (Builder $query): Builder => $query->where('compra', $purchaseId))
             ->orderByDesc('id')
             ->paginate(max(1, min($perPage, 100)));
@@ -118,7 +121,7 @@ class PurchaseTransactionRepository implements PurchaseTransactionService
     {
         return $this->model->newQuery()
             ->select(['id', 'nro', 'compra', 'tipo', 'valor', 'created_at', 'updated_at'])
-            ->selectRaw('img IS NOT NULL AS tiene_documento')
+            ->selectRaw('img IS NOT NULL AS tiene_documento, CASE WHEN LENGTH(img) = 36 THEN img ELSE NULL END AS img')
             ->with(['tipoDetalle', 'compraDetalle.proveedorDetalle:id,nombre']);
     }
 

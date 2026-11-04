@@ -5,10 +5,12 @@ namespace App\Repositories\Farma;
 use App\Interfaces\Farma\DistributionService;
 use App\Models\Farma\Distribucion;
 use App\Models\Farma\Lote;
+use App\Support\TableSearch;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class DistributionRepository implements DistributionService
 {
@@ -30,7 +32,7 @@ class DistributionRepository implements DistributionService
             ->with([
                 'productoDetalle' => static fn ($product) => $product
                     ->select(['id', 'codigo', 'descripcion', 'laboratorio', 'familia'])
-                    ->selectRaw('imagen IS NOT NULL AS tiene_imagen'),
+                    ->selectRaw('imagen IS NOT NULL AND imagen <> \'\' AS tiene_imagen, CASE WHEN LENGTH(imagen) = 36 THEN imagen ELSE NULL END AS imagen_uuid'),
                 'productoDetalle.laboratorioDetalle:id,nombre',
                 'productoDetalle.Familia:id,presentacion,administracion',
                 'productoDetalle.Familia.Presentacion:id,descripcion',
@@ -40,16 +42,12 @@ class DistributionRepository implements DistributionService
 
         if ($search !== '') {
             $query->whereHas('productoDetalle', static function (Builder $product) use ($search): void {
-                $product->where(static function (Builder $product) use ($search): void {
-                    $product
-                        ->where('codigo', 'like', "%{$search}%")
-                        ->orWhere('descripcion', 'like', "%{$search}%")
-                        ->orWhereHas('laboratorioDetalle', static fn (Builder $laboratory): Builder => $laboratory->where('nombre', 'like', "%{$search}%"));
-                });
+                TableSearch::apply($product, $search, ['codigo', 'descripcion'], ['laboratorioDetalle' => ['nombre']]);
             });
         }
 
         return $query
+            ->orderByRaw('CASE WHEN COUNT(distribucion.id) < COUNT(lotes.id) THEN 0 ELSE 1 END')
             ->orderByRaw('MAX(lotes.created_at) DESC')
             ->orderByRaw('MAX(lotes.id) DESC')
             ->paginate(max(1, min($perPage, 100)));
@@ -61,6 +59,8 @@ class DistributionRepository implements DistributionService
         return $this->lot->newQuery()
             ->where('producto', $productId)
             ->with(['distribucionDetalle', 'compraDetalle:id,nro'])
+            ->withExists('distribucionDetalle')
+            ->orderBy('distribucion_detalle_exists')
             ->orderBy('fecha_exp')
             ->orderBy('lote')
             ->get();
@@ -77,6 +77,13 @@ class DistributionRepository implements DistributionService
             }
 
             $existing = $this->distribution->newQuery()->where('lote', $lot->id)->first();
+            $allStocks = (bool) ($data['promocion_todos_stocks'] ?? $existing?->promocion_todos_stocks ?? true);
+            $stockIds = array_key_exists('promocion_stock_ids', $data) ? $data['promocion_stock_ids'] : $existing?->promocion_stock_ids;
+            if (! $allStocks && empty($stockIds)) {
+                throw ValidationException::withMessages(['promocion_stock_ids' => 'Selecciona al menos un stock para la promoción.']);
+            }
+            $data['promocion_todos_stocks'] = $allStocks;
+            $data['promocion_stock_ids'] = $allStocks ? null : array_values(array_map('intval', $stockIds));
             $data['isv'] = $lot->isv !== null
                 ? (bool) $lot->isv
                 : (bool) ($existing?->isv ?? false);

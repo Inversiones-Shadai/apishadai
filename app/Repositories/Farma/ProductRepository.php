@@ -14,6 +14,7 @@ use App\Models\Proveedores;
 use App\Models\Utils\Filter\FilterModel;
 use App\Repositories\Repository;
 use App\Services\Headquarters\ChangeRecorder;
+use App\Support\TableSearch;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
@@ -63,12 +64,16 @@ class ProductRepository extends Repository implements ProductService
             $query = $this->buildBaseQuery();
 
             if ($search !== '') {
-                $query->where(static function (Builder $query) use ($search): void {
-                    $query
-                        ->where('descripcion', 'like', "%{$search}%")
-                        ->orWhere('codigo', 'like', "%{$search}%")
-                        ->orWhere('codigobar', 'like', "%{$search}%");
-                });
+                TableSearch::apply($query, $search, ['codigo', 'codigobar', 'descripcion'], [
+                    'laboratorioDetalle' => ['nombre'],
+                    'categoriaDetalle' => ['nombre'],
+                    'Familia' => ['descripcion'],
+                    'Familia.Presentacion' => ['descripcion'],
+                    'unidadDetalle' => ['abreviatura_c', 'abreviatura_v'],
+                    'estadoDetalle' => ['descripcion'],
+                    'principiosActivos' => ['nombre'],
+                    'principiosActivos.concentracionDetalle' => ['valor'],
+                ]);
             }
 
             if ($laboratory !== null && $laboratory > 0) {
@@ -118,7 +123,8 @@ class ProductRepository extends Repository implements ProductService
             if ($textFilters !== []) {
                 $query->where(static function (Builder $query) use ($textFilters): void {
                     foreach ($textFilters as $key => $value) {
-                        $query->orWhere($key, 'like', $value);
+                        $column = $query->getQuery()->getGrammar()->wrap($query->qualifyColumn($key));
+                        $query->orWhereRaw('LOWER('.$column.') LIKE ?', [mb_strtolower($value)]);
                     }
                 });
             }
@@ -161,6 +167,24 @@ class ProductRepository extends Repository implements ProductService
                 $product->principiosActivos()->sync($this->uniqueIds($principiosActivos));
             }
             app(ChangeRecorder::class)->record($this->model->newQuery()->findOrFail($id), 'UPDATE');
+
+            return true;
+        }, 3);
+    }
+
+    public function delete(int $id): bool
+    {
+        return DB::transaction(function () use ($id): bool {
+            DB::table('producto_relacion_mutex')->where('id', 1)->lockForUpdate()->firstOrFail();
+            $product = $this->model->newQuery()->whereKey($id)->lockForUpdate()->first();
+            if ($product === null) {
+                return false;
+            }
+
+            $product->principiosActivos()->detach();
+            if (! $product->delete()) {
+                throw new \RuntimeException('No se pudo eliminar el producto.');
+            }
 
             return true;
         }, 3);
@@ -325,7 +349,7 @@ class ProductRepository extends Repository implements ProductService
                 'created_at',
                 'updated_at',
             ])
-            ->selectRaw('imagen IS NOT NULL AS tiene_imagen');
+            ->selectRaw('imagen IS NOT NULL AND imagen <> \'\' AS tiene_imagen, CASE WHEN LENGTH(imagen) = 36 THEN imagen ELSE NULL END AS imagen_uuid');
     }
 
     protected function sanitizeData(array $data): array

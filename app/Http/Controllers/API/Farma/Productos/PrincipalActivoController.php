@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Productos\ConcentracionFilterRequest;
 use App\Http\Requests\Farma\Productos\PrincipalActivoFilterRequest;
 use App\Http\Requests\Farma\Productos\PrincipalActivoRequest;
+use App\Http\Requests\Util\TableSearchRequest;
 use App\Http\Resources\Farma\ConcentracionResource;
 use App\Http\Resources\Farma\PrincipalActivoResource;
 use App\Interfaces\Farma\ConcentracionService;
@@ -22,10 +23,10 @@ class PrincipalActivoController extends Controller
         private readonly ConcentracionService $concentraciones,
     ) {}
 
-    public function index(): JsonResponse
+    public function index(TableSearchRequest $request): JsonResponse
     {
         return $this->sendResponse(
-            PrincipalActivoResource::collection($this->repository->paginate()),
+            PrincipalActivoResource::collection($this->repository->searchPage((string) $request->validated('search', ''), ['id', 'nombre'], ['concentracionDetalle' => ['valor']])),
             'ok',
             200,
             true,

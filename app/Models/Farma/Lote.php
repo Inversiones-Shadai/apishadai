@@ -13,7 +13,7 @@ class Lote extends Model
 
     protected $table = 'lotes';
 
-    protected $fillable = ['compra', 'producto', 'lote', 'fecha_elab', 'fecha_exp', 'cantidad', 'costo', 'isv'];
+    protected $fillable = ['compra', 'producto', 'lote', 'fecha_elab', 'fecha_exp', 'cantidad', 'costo', 'isv', 'es_bonificacion'];
 
     protected function casts(): array
     {
@@ -25,6 +25,7 @@ class Lote extends Model
             'cantidad' => 'decimal:4',
             'costo' => 'decimal:4',
             'isv' => 'boolean',
+            'es_bonificacion' => 'boolean',
         ];
     }
 

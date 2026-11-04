@@ -2,6 +2,7 @@
 
 namespace App\Services\Headquarters;
 
+use App\Jobs\PushHeadquartersOutboxJob;
 use App\Models\Device;
 use App\Models\Farma\Concentracion;
 use App\Models\Farma\Distribucion;
@@ -31,7 +32,9 @@ use App\Models\Proveedores;
 use App\Models\StockEstado;
 use App\Models\Stocks;
 use App\Models\SyncChange;
+use App\Services\Images\ImageStorage;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -116,6 +119,7 @@ class ChangeRecorder
             }
             if (in_array('imagen_base64', EntityContract::FIELDS[$entity], true)) {
                 $image = $fresh->getRawOriginal('imagen');
+                $image = app(ImageStorage::class)->base64($image);
                 $payload['imagen_base64'] = is_string($image) && $image !== '' ? base64_encode($image) : null;
             }
             if (in_array($entity, ['catalogospos'], true)) {
@@ -180,7 +184,7 @@ class ChangeRecorder
         if (config('headquarters.send_immediately')) {
             DB::afterCommit(function (): void {
                 try {
-                    app(OutboxSender::class)->send(1);
+                    Bus::dispatch(new PushHeadquartersOutboxJob);
                 } catch (\Throwable $exception) {
                     Log::warning('El cambio confirmado permanece en hq_outbox.', ['exception' => $exception::class]);
                 }
@@ -209,14 +213,44 @@ class ChangeRecorder
         return ['distribucion_id' => (string) $sale->id, 'precio' => $sale->precio,
             'incluye_isv' => false, 'tasa_isv' => $percent,
             'tratamiento' => $tax === true ? 'GRAVADO' : ($tax === false ? 'EXENTO' : null),
-            'dto1' => $sale->dto1, 'dto2' => $sale->dto2, 'dto3' => $sale->dto3, 'dto4' => $sale->dto4];
+            'dto1' => $sale->dto1, 'dto2' => $sale->dto2, 'dto3' => $sale->dto3, 'dto4' => $sale->dto4,
+            'promocion_activa' => (bool) $sale->promocion_activa,
+            'promocion_porcentaje' => $sale->promocion_porcentaje,
+            'promocion_hasta' => $sale->promocion_hasta?->toDateString(),
+            'promocion_todos_stocks' => (bool) ($sale->promocion_todos_stocks ?? true),
+            'promocion_stock_ids' => $sale->promocion_stock_ids ?? [],
+            'mostrar_encabezado' => (bool) $sale->mostrar_encabezado,
+            'encabezado_texto' => $sale->encabezado_texto];
     }
 
     private function lotData(?Lote $lot): ?array
     {
-        return $lot === null ? null : ['id' => (int) $lot->id, 'producto' => (int) $lot->producto, 'lote' => $lot->lote,
+        if ($lot === null) {
+            return null;
+        }
+        $sale = $this->saleData($lot);
+
+        return ['id' => (int) $lot->id, 'producto' => (int) $lot->producto, 'lote' => $lot->lote,
             'fecha_elab' => $lot->fecha_elab?->toDateString(), 'fecha_exp' => $lot->fecha_exp?->toDateString(),
             'costo' => $lot->costo === null ? null : (string) $lot->getRawOriginal('costo'),
-            'venta' => $this->saleData($lot)];
+            'venta' => $sale, 'valoracion' => $this->valuationData($lot, $sale)];
+    }
+
+    private function valuationData(Lote $lot, ?array $sale): ?array
+    {
+        $tax = $lot->isv;
+        if ($tax === null) {
+            // Converted historical lots can retain an explicit distribution tax
+            // without a purchase flag. The distribution must be unambiguous.
+            return isset($sale['tasa_isv'], $sale['tratamiento'])
+                ? ['tasa_isv' => $sale['tasa_isv'], 'tratamiento' => $sale['tratamiento']] : null;
+        }
+        $rate = config('farma.purchase_isv_rate');
+
+        return [
+            'tasa_isv' => $tax === false ? '0.0000' : ($tax === true && is_numeric($rate) && $rate > 0 && $rate <= 1
+                ? number_format((float) $rate * 100, 4, '.', '') : null),
+            'tratamiento' => $tax === true ? 'GRAVADO' : ($tax === false ? 'EXENTO' : null),
+        ];
     }
 }

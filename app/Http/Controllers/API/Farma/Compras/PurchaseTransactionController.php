@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Compras\PurchaseTransactionRequest;
 use App\Http\Resources\Farma\PurchaseTransactionResource;
 use App\Interfaces\Farma\PurchaseTransactionService;
+use App\Services\Images\InvoiceStorage;
 use App\Utils\Services\Base64UtilityService;
 use DomainException;
 use Illuminate\Http\JsonResponse;
@@ -25,7 +26,7 @@ class PurchaseTransactionController extends Controller
         $purchase = $request->filled('compra') ? $request->integer('compra') : null;
 
         return $this->sendResponse(PurchaseTransactionResource::collection(
-            $this->repository->paginate($request->integer('per_page', 30), $purchase),
+            $this->repository->paginate($request->integer('per_page', 30), $purchase, $request->string('search')->toString()),
         ), 'ok', 200, true);
     }
 
@@ -63,6 +64,7 @@ class PurchaseTransactionController extends Controller
     public function document(int $id): JsonResponse
     {
         $stored = $this->repository->document($id);
+        $stored = app(InvoiceStorage::class)->base64($stored);
 
         if ($stored === null) {
             return $this->sendError('Documento no encontrado.', null, 404);

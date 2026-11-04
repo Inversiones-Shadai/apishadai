@@ -20,7 +20,9 @@ TransferRepository captura un solo CREATE después de completar cabecera y detal
 
 Todos los escritores actuales de estas entidades usan Eloquent o los métodos integrados de ProductRepository. Operaciones directas DB::table, SQL y updates/deletes/insert masivos de Eloquent omiten save/delete: cualquier escritor futuro de ese tipo debe utilizar ChangeRecorder explícitamente dentro de la misma transacción o escribir mediante modelos. No habilitar QueryBuilder para escritores sincronizados sin integrar la captura.
 
-Después del commit se intenta enviar un lote. Una caída de hq-api no revierte la operación de negocio ya confirmada: queda un pendiente persistente. OutboxSender reclama lotes con bloqueo y vencimiento; hace HTTP fuera de la transacción y confirma enviados únicamente cuando hq-api reconoce todos los UUID. Reintentos conservan UUID/version/payload y usan nonce/firma nuevos. Un worker interrumpido deja claims recuperables después de un minuto.
+Después del commit, si `HQ_SEND_IMMEDIATELY=true`, se encola `PushHeadquartersOutboxJob` en la conexión `database`; el guardado no espera llamadas HTTP a HQ. Ejecutar `php artisan queue:work database --timeout=60` para procesar los envíos inmediatos. Se usa una conexión asíncrona explícita incluso si la cola predeterminada es `sync`. Si falla el encolado o no hay worker, el cambio permanece en `hq_outbox`: el envío programado `hq:push` cada minuto (requiere el scheduler activo) o su ejecución manual recupera los pendientes.
+
+Una caída de hq-api no revierte la operación de negocio ya confirmada: queda un pendiente persistente. OutboxSender reclama lotes con bloqueo y vencimiento; hace HTTP fuera de la transacción y confirma enviados únicamente cuando hq-api reconoce todos los UUID. Reintentos conservan UUID/version/payload y usan nonce/firma nuevos. Un worker interrumpido deja claims recuperables después de un minuto.
 
 Los estados materializados de hq-api solo aceptan versiones superiores. El POS debe seguir la misma regla, incluyendo tombstones, para que entregas fuera de orden nunca sobrescriban estados nuevos.
 

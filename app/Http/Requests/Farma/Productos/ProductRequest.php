@@ -65,7 +65,6 @@ class ProductRequest extends BaseRequest
                 'nullable',
                 'string',
                 'max:50',
-                Rule::unique('productos', 'codigobar')->ignore($id),
             ],
             'descripcion' => ['required', 'string', 'max:150'],
             'estado.id' => ['required', 'integer', 'exists:prod_estado,id'],

@@ -30,12 +30,13 @@ class PurchaseRequest extends BaseRequest
             'nota' => ['nullable', 'string', 'max:5000'],
             'img' => ['nullable', 'string', 'max:1398104', $this->base64Rule()],
             'detalles' => ['required', 'array', 'min:1', 'max:200'],
-            'detalles.*.producto' => ['required', 'integer', 'distinct', 'exists:productos,id'],
+            'detalles.*.producto' => ['required', 'integer', 'exists:productos,id'],
+            'detalles.*.es_bonificacion' => ['sometimes', 'boolean'],
             'detalles.*.cantidad' => ['required', 'integer', 'min:1', 'max:1000000'],
             'detalles.*.lote' => ['required', 'string', 'max:100'],
             'detalles.*.fecha_elaboracion' => ['required', 'date_format:Y-m-d'],
             'detalles.*.fecha_expiracion' => ['required', 'date_format:Y-m-d', 'after_or_equal:detalles.*.fecha_elaboracion'],
-            'detalles.*.costo' => ['required', 'numeric', 'min:0.01', 'max:99999999.99'],
+            'detalles.*.costo' => ['required', 'numeric', 'min:0', 'max:99999999.99'],
             'detalles.*.isv' => ['required', 'boolean'],
             'detalles.*.descuento' => ['required', 'numeric', 'min:0', 'max:99999999.99'],
         ];
@@ -61,6 +62,9 @@ class PurchaseRequest extends BaseRequest
                 }
 
                 $quantity = max(0, (int) $detail['cantidad']);
+                if ((float) $detail['costo'] < 0.01 && ! filter_var($detail['es_bonificacion'] ?? false, FILTER_VALIDATE_BOOL)) {
+                    $validator->errors()->add("detalles.{$index}.costo", 'El costo debe ser mayor que cero para productos que no son bonificación.');
+                }
                 $cost = max(0, (float) $detail['costo']);
                 $subtotal = $quantity * $cost;
                 $unitTax = filter_var($detail['isv'] ?? false, FILTER_VALIDATE_BOOL)
@@ -86,7 +90,6 @@ class PurchaseRequest extends BaseRequest
             '*.exists' => 'El valor seleccionado para :attribute no existe.',
             '*.unique' => 'La factura ya está registrada para este proveedor.',
             'detalles.min' => 'Agrega al menos un producto a la compra.',
-            'detalles.*.producto.distinct' => 'Cada producto debe aparecer una sola vez.',
             'img.max' => 'El documento escaneado no debe exceder 1 MB.',
         ];
     }

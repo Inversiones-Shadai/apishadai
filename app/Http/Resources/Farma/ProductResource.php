@@ -2,8 +2,10 @@
 
 namespace App\Http\Resources\Farma;
 
+use App\Services\Images\ImageStorage;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Str;
 
 class ProductResource extends JsonResource
 {
@@ -41,6 +43,8 @@ class ProductResource extends JsonResource
             ]),
             'estado' => $this->whenLoaded('estadoDetalle', fn ($estado): array => $estado->only(['id', 'descripcion'])),
             'tiene_imagen' => (bool) $this->tiene_imagen,
+            'imagen_uuid' => Str::isUuid(($this->imagen_uuid ?? $this->imagen) ?? '') ? ($this->imagen_uuid ?? $this->imagen) : null,
+            'imagen_url' => app(ImageStorage::class)->url(($this->imagen_uuid ?? $this->imagen), 'prdbtn06'),
             'principios_activos' => PrincipalActivoResource::collection($this->whenLoaded('principiosActivos')),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,

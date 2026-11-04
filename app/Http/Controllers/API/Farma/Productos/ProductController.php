@@ -5,9 +5,11 @@ namespace App\Http\Controllers\API\Farma\Productos;
 use App\DTO\Farma\ProductData;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Productos\FamiliaFilterRequest;
+use App\Http\Requests\Farma\Productos\FamiliaLookupRequest;
 use App\Http\Requests\Farma\Productos\LaboratorioFilterRequest;
 use App\Http\Requests\Farma\Productos\PrincipalActivoFilterRequest;
 use App\Http\Requests\Farma\Productos\PrincipalActivoListRequest;
+use App\Http\Requests\Farma\Productos\ProductChildRequest;
 use App\Http\Requests\Farma\Productos\ProductFilterRequest;
 use App\Http\Requests\Farma\Productos\ProductParentLookupRequest;
 use App\Http\Requests\Farma\Productos\ProductPrincipleRemoveRequest;
@@ -28,7 +30,11 @@ use App\Interfaces\Farma\ProdEstadoService;
 use App\Interfaces\Farma\ProductService;
 use App\Interfaces\Farma\ProdUnidadService;
 use App\Interfaces\Laboratorios\LaboratorioService;
+use App\Models\Farma\PrincipalActivo;
 use App\Models\Farma\Producto;
+use App\Services\Farma\ProductChildCreator;
+use App\Services\Images\ImageStorage;
+use App\Support\TableSearch;
 use App\Utils\Services\Base64UtilityService;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
@@ -55,11 +61,11 @@ class ProductController extends Controller
         $search = trim($data['search'] ?? '');
         $query = Producto::query()->select(['id', 'codigo', 'descripcion']);
         if ($search !== '') {
-            $pattern = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $search).'%';
+            $pattern = '%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], mb_strtolower($search)).'%';
             $query->where(function ($q) use ($pattern): void {
-                $q->whereRaw("codigo LIKE ? ESCAPE '!'", [$pattern])
-                    ->orWhereRaw("descripcion LIKE ? ESCAPE '!'", [$pattern])
-                    ->orWhereRaw("codigobar LIKE ? ESCAPE '!'", [$pattern]);
+                $q->whereRaw("LOWER(codigo) LIKE ? ESCAPE '!'", [$pattern])
+                    ->orWhereRaw("LOWER(descripcion) LIKE ? ESCAPE '!'", [$pattern])
+                    ->orWhereRaw("LOWER(codigobar) LIKE ? ESCAPE '!'", [$pattern]);
             });
         }
         if (isset($data['exclude'])) {
@@ -69,6 +75,23 @@ class ProductController extends Controller
         $page->through(fn ($product): array => ['id' => (string) $product->id, 'codigo' => $product->codigo, 'descripcion' => $product->descripcion]);
 
         return $this->sendResponse($page, 'ok', 200, true);
+    }
+
+    public function createChild(ProductChildRequest $request, int $id, ProductChildCreator $creator): JsonResponse
+    {
+        try {
+            $child = $creator->create($id, $request->validated('descripcion'));
+        } catch (ValidationException $exception) {
+            return response()->json(['code' => 422, 'message' => 'No se pudo crear el producto hijo.', 'errors' => $exception->errors()], 422);
+        } catch (QueryException $exception) {
+            return $this->databaseError($exception, 'No se pudo crear el producto hijo.');
+        }
+
+        return $this->sendResponse([
+            'id' => (string) $child->id,
+            'codigo' => $child->codigo,
+            'producto_padre_id' => (string) $child->producto_padre_id,
+        ], 'Producto hijo creado correctamente.', 201);
     }
 
     public function index(Request $request): JsonResponse
@@ -124,10 +147,15 @@ class ProductController extends Controller
         );
     }
 
-    public function familias(Request $request): JsonResponse
+    public function familias(FamiliaLookupRequest $request): JsonResponse
     {
+        $data = $request->validated();
+
         return $this->sendResponse(
-            FamiliaResource::collection($request->boolean('all') ? $this->familias->getAll() : $this->familias->paginate()),
+            FamiliaResource::collection($request->boolean('all') ? $this->familias->getAll() : $this->familias->lookupPage(
+                trim($data['search'] ?? ''),
+                (int) ($data['per_page'] ?? 30),
+            )),
             'ok',
             200,
             true,
@@ -186,8 +214,14 @@ class ProductController extends Controller
 
     public function todosPrincipiosActivos(PrincipalActivoListRequest $request): JsonResponse
     {
+        $data = $request->validated();
+        $query = PrincipalActivo::query()
+            ->select(['id', 'nombre', 'concentracion'])
+            ->with('concentracionDetalle:id,valor');
+        TableSearch::apply($query, trim($data['search'] ?? ''), ['nombre'], ['concentracionDetalle' => ['valor']]);
+
         return $this->sendResponse(
-            PrincipalActivoResource::collection($request->boolean('all') ? $this->principios->getAll() : $this->principios->paginate(15)),
+            PrincipalActivoResource::collection($request->boolean('all') ? $this->principios->getAll() : $query->orderByDesc('id')->paginate((int) ($data['per_page'] ?? 15))),
             'ok',
             200,
             true,
@@ -316,7 +350,15 @@ class ProductController extends Controller
         } catch (Throwable $throwable) {
             $this->logError('ProductController destroy', $throwable);
 
-            return $this->databaseError($throwable, 'No se pudo eliminar el producto.');
+            if ($throwable instanceof QueryException && (
+                (string) $throwable->getCode() === '23503'
+                || (int) ($throwable->errorInfo[1] ?? 0) === 1451
+                || str_contains(strtolower((string) ($throwable->errorInfo[2] ?? '')), 'foreign key constraint')
+            )) {
+                return $this->sendError('No se puede eliminar el producto porque tiene lotes, compras, productos hijos u otros registros relacionados.', null, 409);
+            }
+
+            return $this->sendError('No se pudo eliminar el producto.', null, 500);
         }
     }
 
@@ -324,6 +366,7 @@ class ProductController extends Controller
     {
         try {
             $stored = $this->repository->getImage($id);
+            $stored = app(ImageStorage::class)->base64($stored);
 
             if ($stored === null) {
                 return $this->sendError('Imagen no encontrada.', null, 404);

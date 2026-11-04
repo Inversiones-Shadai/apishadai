@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API\Farma\Productos;
 use App\DTO\Farma\FamAdministracionData;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Productos\FamAdministracionRequest;
+use App\Http\Requests\Util\TableSearchRequest;
 use App\Http\Resources\Farma\FamAdministracionResource;
 use App\Interfaces\Farma\FamAdministracionService;
 use Illuminate\Database\QueryException;
@@ -15,10 +16,10 @@ class FamAdministracionController extends Controller
 {
     public function __construct(private readonly FamAdministracionService $repository) {}
 
-    public function index(): JsonResponse
+    public function index(TableSearchRequest $request): JsonResponse
     {
         return $this->sendResponse(
-            FamAdministracionResource::collection($this->repository->paginate()),
+            FamAdministracionResource::collection($this->repository->searchPage((string) $request->validated('search', ''), ['id', 'descripcion'], [])),
             'ok',
             200,
             true,

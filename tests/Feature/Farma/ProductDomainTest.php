@@ -13,6 +13,7 @@ use App\Interfaces\Farma\ProdCategoriaService;
 use App\Interfaces\Farma\ProdEstadoService;
 use App\Interfaces\Farma\ProductService;
 use App\Interfaces\RepositoryInterface;
+use App\Jobs\PushHeadquartersOutboxJob;
 use App\Models\Farma\Concentracion;
 use App\Models\Farma\FamAdministracion;
 use App\Models\Farma\Familia;
@@ -34,14 +35,301 @@ use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 use Tests\TestCase;
 
 class ProductDomainTest extends TestCase
 {
+    public function test_product_active_picker_pages_and_searches_names_and_concentrations_in_the_database(): void
+    {
+        $this->withoutMiddleware();
+        $this->seedProductDomain();
+        $concentration = Concentracion::create(['valor' => '875/125 mg']);
+        foreach (range(1, 24) as $number) {
+            PrincipalActivo::create(['nombre' => 'Principio '.$number, 'concentracion' => $concentration->id]);
+        }
+        $path = $this->productResourceBase('ProductController').'/principios_activos';
+        $first = $this->getJson($path.'?per_page=10')->assertOk()->assertJsonCount(10, 'data');
+        $second = $this->getJson($path.'?per_page=10&page=2')->assertOk()->assertJsonCount(10, 'data');
+        $this->assertEmpty(array_intersect(array_column($first->json('data'), 'id'), array_column($second->json('data'), 'id')));
+        $this->getJson($path.'?per_page=10&search=875%2F125')->assertOk()
+            ->assertJsonCount(10, 'data')->assertJsonPath('meta.total', 24);
+        $this->getJson($path.'?per_page=10&search=PRINCIPIO%2024')->assertOk()
+            ->assertJsonCount(1, 'data')->assertJsonPath('data.0.nombre', 'Principio 24');
+        $this->getJson($path.'?per_page=51')->assertUnprocessable();
+        $this->getJson($path.'?search='.str_repeat('a', 256))->assertUnprocessable();
+    }
+
+    public function test_product_deletion_removes_its_principle_links_and_publishes_one_hq_tombstone(): void
+    {
+        $this->withoutMiddleware();
+        [$parent, $association] = $this->seedProductDomain();
+        $product = $parent->replicate();
+        $product->fill(['codigo' => 'DELETE-ONLY', 'codigobar' => null])->save();
+        $product->principiosActivos()->attach($association->pactivo);
+        (require database_path('migrations/2026_10_01_000024_create_sync_changes_table.php'))->up();
+        (require database_path('migrations/2026_10_01_000030_create_headquarters_outbox.php'))->up();
+        Schema::create('devices', fn (Blueprint $table) => $table->integer('id', true));
+        (require database_path('migrations/2026_10_01_000032_add_headquarters_device_links_and_stock_scope.php'))->up();
+        config(['headquarters.publishing_enabled' => true, 'headquarters.send_immediately' => false]);
+
+        $path = $this->productResourceBase('ProductController').'/eliminar/'.$product->id;
+        $this->deleteJson($path)->assertOk()->assertJsonPath('data', true);
+        $this->assertDatabaseMissing('productos', ['id' => $product->id]);
+        $this->assertDatabaseMissing('prod_activo', ['producto' => $product->id]);
+        $this->assertDatabaseHas('principal_activos', ['id' => $association->pactivo]);
+        $this->assertDatabaseHas('prod_activo', ['producto' => $parent->id, 'pactivo' => $association->pactivo]);
+        $change = SyncChange::sole();
+        $this->assertSame('productos', $change->entity);
+        $this->assertEquals($product->id, $change->entity_id);
+        $this->assertSame('DELETE', $change->action);
+        $this->assertDatabaseHas('hq_outbox', ['sync_change_id' => $change->id]);
+        $this->deleteJson($path)->assertNotFound()->assertJsonPath('message', 'Producto no encontrado.');
+        $this->assertDatabaseCount('sync_changes', 1);
+    }
+
+    #[DataProvider('productDeletionReferences')]
+    public function test_referenced_product_returns_conflict_and_preserves_its_principles(string $reference): void
+    {
+        $this->withoutMiddleware();
+        [$product, $association] = $this->seedProductDomain();
+        if ($reference !== 'purchase') {
+            DB::table('compra_detalle')->where('producto', $product->id)->delete();
+        }
+        if ($reference === 'child') {
+            $child = $product->replicate();
+            $child->fill(['codigo' => 'CHILD-DELETE', 'codigobar' => null, 'producto_padre_id' => $product->id])->save();
+        }
+        if ($reference === 'lot') {
+            Schema::create('lotes', function (Blueprint $table): void {
+                $table->id();
+                $table->foreignId('producto')->constrained('productos')->restrictOnDelete();
+            });
+            DB::table('lotes')->insert(['producto' => $product->id]);
+        }
+        $this->deleteJson($this->productResourceBase('ProductController').'/eliminar/'.$product->id)
+            ->assertConflict()->assertJsonPath('message', 'No se puede eliminar el producto porque tiene lotes, compras, productos hijos u otros registros relacionados.');
+        $this->assertDatabaseHas('productos', ['id' => $product->id]);
+        $this->assertDatabaseHas('prod_activo', ['producto' => $product->id, 'pactivo' => $association->pactivo]);
+        $table = match ($reference) {
+            'purchase' => 'compra_detalle', 'lot' => 'lotes', 'child' => 'productos'
+        };
+        $column = $reference === 'child' ? 'producto_padre_id' : 'producto';
+        $this->assertDatabaseHas($table, [$column => $product->id]);
+    }
+
+    public static function productDeletionReferences(): array
+    {
+        return [['purchase'], ['lot'], ['child']];
+    }
+
+    public function test_hq_failure_restores_deleted_product_and_principle_links(): void
+    {
+        $this->withoutMiddleware();
+        [$product, $association] = $this->seedProductDomain();
+        DB::table('compra_detalle')->where('producto', $product->id)->delete();
+        (require database_path('migrations/2026_10_01_000024_create_sync_changes_table.php'))->up();
+        (require database_path('migrations/2026_10_01_000030_create_headquarters_outbox.php'))->up();
+        Schema::create('devices', fn (Blueprint $table) => $table->integer('id', true));
+        (require database_path('migrations/2026_10_01_000032_add_headquarters_device_links_and_stock_scope.php'))->up();
+        DB::unprepared("CREATE TRIGGER reject_product_delete_event BEFORE INSERT ON sync_changes WHEN NEW.action = 'DELETE' BEGIN SELECT RAISE(ABORT, 'Test HQ failure'); END;");
+        config(['headquarters.publishing_enabled' => true, 'headquarters.send_immediately' => false]);
+        try {
+            (new ProductRepository(new Producto))->delete($product->id);
+            $this->fail('La eliminación debe fallar cuando no puede registrar su evento HQ.');
+        } catch (QueryException $exception) {
+            $this->assertStringContainsString('Test HQ failure', $exception->getMessage());
+        }
+        $this->assertDatabaseHas('productos', ['id' => $product->id]);
+        $this->assertDatabaseHas('prod_activo', ['producto' => $product->id, 'pactivo' => $association->pactivo]);
+        $this->assertDatabaseCount('sync_changes', 0);
+        $this->assertDatabaseCount('hq_outbox', 0);
+        $this->deleteJson($this->productResourceBase('ProductController').'/eliminar/'.$product->id)
+            ->assertStatus(500)->assertJsonPath('message', 'No se pudo eliminar el producto.');
+        $this->assertDatabaseHas('productos', ['id' => $product->id]);
+        $this->assertDatabaseHas('prod_activo', ['producto' => $product->id, 'pactivo' => $association->pactivo]);
+    }
+
+    public function test_child_permission_migration_registers_its_own_action_and_preserves_assignments(): void
+    {
+        foreach (['modulos', 'vistas', 'actionsvistas'] as $name) {
+            Schema::create($name, function (Blueprint $table) use ($name): void {
+                $table->id();
+                $table->string('codigo')->unique();
+                $table->string('nombre');
+                if ($name === 'vistas') {
+                    $table->integer('modulo');
+                }
+                if ($name === 'actionsvistas') {
+                    $table->integer('vista');
+                }
+                $table->timestamps();
+            });
+        }
+        Schema::create('permisos', function (Blueprint $table): void {
+            $table->id();
+            $table->integer('actionvista');
+        });
+        DB::table('modulos')->insert(['id' => 4, 'codigo' => 'frm', 'nombre' => 'farma']);
+        DB::table('vistas')->insert(['id' => 7, 'codigo' => 'prd', 'nombre' => 'productos', 'modulo' => 4]);
+        DB::table('actionsvistas')->insert(['codigo' => 'prdbtn02', 'nombre' => 'crear', 'vista' => 7]);
+        DB::table('actionsvistas')->insert(['codigo' => 'prdbtn13', 'nombre' => 'listar categorias', 'vista' => 7]);
+        $migration = require database_path('migrations/2026_10_27_000003_register_product_child_permission.php');
+        $migration->up();
+        $migration->up();
+        $this->assertDatabaseCount('actionsvistas', 3);
+        $this->assertDatabaseCount('permisos', 0);
+        $this->assertDatabaseHas('actionsvistas', ['codigo' => 'prdbtn19', 'nombre' => 'Convertir producto padre a hijo', 'vista' => 7]);
+        $migration->down();
+        $this->assertDatabaseMissing('actionsvistas', ['codigo' => 'prdbtn19']);
+        $this->assertDatabaseHas('actionsvistas', ['codigo' => 'prdbtn02']);
+        $this->assertDatabaseHas('actionsvistas', ['codigo' => 'prdbtn13', 'nombre' => 'listar categorias']);
+        $migration->up();
+        $action = DB::table('actionsvistas')->where('codigo', 'prdbtn19')->value('id');
+        DB::table('permisos')->insert(['actionvista' => $action]);
+        $migration->down();
+        $this->assertDatabaseHas('actionsvistas', ['id' => $action]);
+        $this->assertDatabaseHas('permisos', ['actionvista' => $action]);
+        DB::table('actionsvistas')->where('id', $action)->update(['nombre' => 'Otra acción']);
+        try {
+            $migration->up();
+            $this->fail('La migración debe rechazar un código ocupado por otra acción.');
+        } catch (\LogicException $exception) {
+            $this->assertStringContainsString('otra acción', $exception->getMessage());
+        }
+        $migration->down();
+        $this->assertDatabaseHas('actionsvistas', ['id' => $action, 'nombre' => 'Otra acción']);
+        DB::table('actionsvistas')->where('id', $action)->update(['vista' => 99]);
+        $this->expectException(\LogicException::class);
+        $migration->up();
+    }
+
+    public function test_child_creation_copies_the_catalog_and_publishes_complete_headquarters_dependencies(): void
+    {
+        $this->withoutMiddleware();
+        [$parent, $active] = $this->seedProductDomain();
+        $originalParent = $parent->fresh()->getRawOriginal();
+        (require database_path('migrations/2026_10_24_000001_allow_shared_product_barcodes.php'))->up();
+        (require database_path('migrations/2026_10_01_000024_create_sync_changes_table.php'))->up();
+        (require database_path('migrations/2026_10_01_000030_create_headquarters_outbox.php'))->up();
+        Schema::create('devices', fn (Blueprint $table) => $table->integer('id', true));
+        (require database_path('migrations/2026_10_01_000032_add_headquarters_device_links_and_stock_scope.php'))->up();
+        config(['headquarters.publishing_enabled' => true, 'headquarters.send_immediately' => false]);
+
+        $base = $this->productResourceBase('ProductController');
+        $this->postJson($base.'/crear-hijo/'.$parent->id, [
+            'descripcion' => ' <b>Tableta individual</b> ',
+            'codigo' => 'IGNORAR', 'unidad' => $parent->unidad, 'producto_padre_id' => 999,
+        ])->assertCreated()->assertJsonPath('data.codigo', 'PRD-001H')
+            ->assertJsonPath('data.producto_padre_id', (string) $parent->id);
+
+        $child = Producto::where('codigo', 'PRD-001H')->firstOrFail();
+        $this->assertSame('Tableta individual', $child->descripcion);
+        $this->assertSame($parent->only(['categoria', 'laboratorio', 'familia', 'codigobar', 'estado']),
+            $child->only(['categoria', 'laboratorio', 'familia', 'codigobar', 'estado']));
+        $this->assertSame($parent->getRawOriginal('imagen'), $child->getRawOriginal('imagen'));
+        $this->assertSame([$active->pactivo], $child->principiosActivos()->pluck('principal_activos.id')->all());
+        $this->assertSame(['abreviatura_c' => 'UND', 'abreviatura_v' => 'UND', 'cantidad_c' => 1, 'cantidad_v' => 1],
+            $child->unidadDetalle->only(['abreviatura_c', 'abreviatura_v', 'cantidad_c', 'cantidad_v']));
+        $this->assertSame($originalParent, $parent->fresh()->getRawOriginal());
+
+        $changes = SyncChange::where('entity', 'productos')->where('entity_id', $child->id)->get();
+        $this->assertCount(1, $changes);
+        $this->assertSame('CREATE', $changes[0]->action);
+        $this->assertSame([$active->pactivo], $changes[0]->payload['principios_activos']);
+        $this->assertSame((string) $parent->id, (string) $changes[0]->payload['producto_padre_id']);
+        $this->assertSame('imagen-del-producto', base64_decode($changes[0]->payload['imagen_base64'], true));
+        $available = [];
+        foreach (SyncChange::orderBy('id')->get() as $change) {
+            foreach (EntityContract::references($change->entity, $change->payload) as $reference) {
+                $this->assertArrayHasKey($reference['entity'].':'.$reference['entity_id'], $available);
+            }
+            $available[$change->entity.':'.$change->entity_id] = true;
+            $this->assertDatabaseHas('hq_outbox', ['sync_change_id' => $change->id]);
+        }
+        $this->postJson($base.'/crear-hijo/'.$parent->id, ['descripcion' => 'Duplicado'])
+            ->assertUnprocessable()->assertJsonValidationErrors('codigo');
+        $this->assertSame(1, SyncChange::where('entity', 'productos')->where('entity_id', $child->id)->count());
+    }
+
+    public function test_child_creation_reuses_unit_and_rejects_invalid_parents_descriptions_and_codes(): void
+    {
+        $this->withoutMiddleware();
+        [$parent] = $this->seedProductDomain();
+        $parent->codigobar = null;
+        $parent->save();
+        $unit = ProdUnidad::create(['abreviatura_c' => 'UND', 'abreviatura_v' => 'UND', 'cantidad_c' => 1, 'cantidad_v' => 1]);
+        $base = $this->productResourceBase('ProductController').'/crear-hijo/';
+        foreach ([[], ['descripcion' => ' <b></b> '], ['descripcion' => str_repeat('a', 151)], ['descripcion' => []]] as $input) {
+            $this->postJson($base.$parent->id, $input)->assertUnprocessable()->assertJsonValidationErrors('descripcion', 'data.errors');
+        }
+        $this->postJson($base.'999999', ['descripcion' => 'Hijo'])->assertNotFound();
+        foreach (['PADREH', 'PADREh'] as $code) {
+            $parent->update(['codigo' => $code]);
+            $this->postJson($base.$parent->id, ['descripcion' => 'Hijo'])->assertUnprocessable()
+                ->assertJsonValidationErrors('producto_padre_id');
+        }
+        $parent->update(['codigo' => str_repeat('a', 20)]);
+        $this->postJson($base.$parent->id, ['descripcion' => 'Hijo'])->assertUnprocessable()->assertJsonValidationErrors('codigo');
+        $parent->update(['codigo' => 'PRD-001']);
+        $this->postJson($base.$parent->id, ['descripcion' => 'Hijo'])->assertCreated();
+        $child = Producto::where('codigo', 'PRD-001H')->firstOrFail();
+        $this->assertSame($unit->id, $child->unidad);
+        $this->assertNull($child->codigobar);
+        $child->update(['codigo' => 'SIN-SUFIJO']);
+        $this->postJson($base.$child->id, ['descripcion' => 'Nieto'])->assertUnprocessable()
+            ->assertJsonValidationErrors('producto_padre_id');
+        $child->update(['codigo' => 'PRD-001h']);
+        $this->postJson($base.$parent->id, ['descripcion' => 'Hijo'])->assertUnprocessable()->assertJsonValidationErrors('codigo');
+        $this->assertDatabaseCount('productos', 2);
+        $this->assertDatabaseCount('prod_unidades', 2);
+    }
+
+    public function test_child_creation_rolls_back_product_unit_and_principles_if_hq_recording_fails(): void
+    {
+        $this->withoutMiddleware();
+        [$parent] = $this->seedProductDomain();
+        $parent->update(['codigobar' => null]);
+        (require database_path('migrations/2026_10_01_000024_create_sync_changes_table.php'))->up();
+        (require database_path('migrations/2026_10_01_000030_create_headquarters_outbox.php'))->up();
+        Schema::create('devices', fn (Blueprint $table) => $table->integer('id', true));
+        (require database_path('migrations/2026_10_01_000032_add_headquarters_device_links_and_stock_scope.php'))->up();
+        DB::unprepared("CREATE TRIGGER reject_child_event BEFORE INSERT ON sync_changes WHEN NEW.entity = 'productos' AND NEW.entity_id <> ".$parent->id." BEGIN SELECT RAISE(ABORT, 'Test HQ failure'); END;");
+        config(['headquarters.publishing_enabled' => true, 'headquarters.send_immediately' => false]);
+
+        $this->postJson($this->productResourceBase('ProductController').'/crear-hijo/'.$parent->id, ['descripcion' => 'Hijo'])
+            ->assertStatus(409);
+        $this->assertDatabaseCount('productos', 1);
+        $this->assertDatabaseCount('prod_unidades', 1);
+        $this->assertDatabaseCount('prod_activo', 1);
+        $this->assertDatabaseCount('sync_changes', 0);
+        $this->assertDatabaseCount('hq_outbox', 0);
+    }
+
+    public function test_shared_barcodes_are_accepted_on_create_and_update_but_product_codes_remain_unique(): void
+    {
+        $this->withoutMiddleware();
+        [$product] = $this->seedProductDomain();
+        $migration = require database_path('migrations/2026_10_24_000001_allow_shared_product_barcodes.php');
+        $migration->up();
+        $migration->up();
+        $input = $product->only(['categoria', 'laboratorio', 'unidad', 'familia', 'codigo', 'codigobar', 'descripcion', 'estado']);
+        $base = $this->productResourceBase('ProductController');
+        $this->postJson($base.'/crear', [...$input, 'codigo' => 'BARCODE-SHARED'])->assertCreated();
+        $other = Producto::where('codigo', 'BARCODE-SHARED')->firstOrFail();
+        $this->putJson($this->updatePath($base, $other->id), [...$input, 'codigo' => $other->codigo])->assertOk();
+        $this->assertSame(2, Producto::where('codigobar', $product->codigobar)->count());
+        $this->postJson($base.'/crear', $input)->assertUnprocessable();
+        $this->expectException(\RuntimeException::class);
+        $migration->down();
+    }
+
     public function test_headquarters_product_changes_include_the_final_principles_and_image(): void
     {
         [$product, $active] = $this->seedProductDomain();
@@ -71,6 +359,32 @@ class ProductDomainTest extends TestCase
         $this->assertTrue($repository->addActivePrinciple($product->id, $active->pactivo));
         $this->assertSame([$active->pactivo], SyncChange::orderByDesc('id')->firstOrFail()->payload['principios_activos']);
         $this->assertSame([1, 2, 3], SyncChange::where('entity', 'productos')->orderBy('id')->pluck('version')->all());
+    }
+
+    public function test_product_creation_returns_success_without_waiting_for_headquarters(): void
+    {
+        $this->withoutMiddleware();
+        [$product, $active] = $this->seedProductDomain();
+        (require database_path('migrations/2026_10_01_000024_create_sync_changes_table.php'))->up();
+        (require database_path('migrations/2026_10_01_000030_create_headquarters_outbox.php'))->up();
+        Schema::create('devices', fn (Blueprint $table) => $table->integer('id', true));
+        (require database_path('migrations/2026_10_01_000032_add_headquarters_device_links_and_stock_scope.php'))->up();
+        config(['headquarters.publishing_enabled' => true, 'headquarters.send_immediately' => true, 'queue.default' => 'sync']);
+        Queue::fake();
+        Http::preventStrayRequests();
+        Http::fake(fn () => throw new RuntimeException('The product request must never contact HQ'));
+
+        $payload = $product->only(['categoria', 'laboratorio', 'unidad', 'familia', 'descripcion', 'estado']);
+        $this->postJson($this->productResourceBase('ProductController').'/crear', [
+            ...$payload, 'codigo' => 'ASYNC-HQ', 'principios_activos' => [$active->pactivo],
+        ])->assertCreated()->assertJsonPath('data', true);
+
+        $created = Producto::where('codigo', 'ASYNC-HQ')->sole();
+        $change = SyncChange::where('entity', 'productos')->where('entity_id', $created->id)->sole();
+        $this->assertSame([$active->pactivo], $change->payload['principios_activos']);
+        $this->assertDatabaseHas('hq_outbox', ['sync_change_id' => $change->id, 'sent_at' => null, 'attempts' => 0]);
+        Queue::assertPushed(PushHeadquartersOutboxJob::class);
+        Http::assertNothingSent();
     }
 
     public function test_direct_product_principle_changes_publish_both_affected_products(): void
@@ -448,6 +762,42 @@ class ProductDomainTest extends TestCase
             ->assertJsonPath('meta.total', 1);
     }
 
+    public function test_family_lookup_loads_only_requested_pages_and_finds_new_families_and_related_labels(): void
+    {
+        $this->withoutMiddleware();
+        $this->seedProductDomain();
+        $rows = [];
+        foreach (range(1, 1000) as $number) {
+            $rows[] = ['descripcion' => 'Familia '.$number, 'presentacion' => 1, 'administracion' => 1];
+        }
+        foreach (array_chunk($rows, 100) as $chunk) {
+            DB::table('familia')->insert($chunk);
+        }
+        $presentation = FamPresentacion::create(['descripcion' => 'Jarabe de prueba']);
+        $this->postJson($this->catalogBase('familias').'/crear', [
+            'descripcion' => 'Familia creada en otra pestaña',
+            'presentacion' => $presentation->id, 'administracion' => 1,
+        ])->assertCreated();
+
+        $base = $this->productResourceBase('ProductController').'/familias';
+        $first = $this->getJson($base.'?per_page=10')->assertOk()
+            ->assertJsonCount(10, 'data')->assertJsonPath('meta.total', 1002)
+            ->assertJsonPath('meta.last_page', 101)
+            ->assertJsonPath('data.0.descripcion', 'Familia creada en otra pestaña');
+        $second = $this->getJson($base.'?per_page=10&page=2')->assertOk()
+            ->assertJsonCount(10, 'data')->assertJsonPath('meta.current_page', 2);
+        $this->assertSame([], array_intersect(array_column($first->json('data'), 'id'), array_column($second->json('data'), 'id')));
+        $this->getJson($base.'?per_page=10&page=101')->assertOk()->assertJsonCount(2, 'data');
+        foreach (['JARABE', 'otra pestaña'] as $search) {
+            $this->getJson($base.'?'.http_build_query(['per_page' => 10, 'search' => $search]))->assertOk()
+                ->assertJsonCount(1, 'data')->assertJsonPath('data.0.descripcion', 'Familia creada en otra pestaña');
+        }
+        $this->getJson($base.'?per_page=10&search=oral')->assertOk()->assertJsonPath('meta.total', 1002);
+        $this->getJson($base.'?per_page=10&search=sin-coincidencias')->assertOk()->assertJsonCount(0, 'data');
+        $this->getJson($base.'?per_page=5000')->assertUnprocessable();
+        $this->getJson($base.'?search[]=invalido')->assertUnprocessable();
+    }
+
     #[DataProvider('productCatalogFilters')]
     public function test_product_catalog_filters_search_partial_values(string $catalog, array $items, int $matches): void
     {
@@ -539,7 +889,7 @@ class ProductDomainTest extends TestCase
         $this->withoutMiddleware();
         $routes = collect(app('router')->getRoutes()->getRoutes())
             ->filter(fn ($route) => str_starts_with($route->uri(), 'api/farma/productos/'));
-        $this->assertCount(71, $routes);
+        $this->assertCount(72, $routes);
 
         foreach ($routes as $route) {
             $this->assertStringNotContainsString('{catalogo}', $route->uri());
@@ -1084,6 +1434,54 @@ class ProductDomainTest extends TestCase
         ]])->assertOk()->assertJsonPath('meta.total', 0)->assertJsonPath('data', []);
     }
 
+    public function test_product_list_searches_the_complete_catalog_before_pagination_regardless_of_case(): void
+    {
+        $this->withoutMiddleware();
+        [$product] = $this->seedProductDomain();
+        $product->update(['descripcion' => 'Albendafar Suspension, frasco 20ml']);
+        for ($index = 1; $index <= 35; $index++) {
+            $copy = $product->replicate();
+            $copy->fill(['codigo' => 'OTHER-'.$index, 'codigobar' => null, 'descripcion' => 'Otro producto '.$index])->save();
+        }
+        $base = $this->productResourceBase('ProductController').'/listar';
+        $unfiltered = $this->getJson($base)->assertOk()->assertJsonPath('meta.total', 36);
+        $this->assertNotContains($product->id, array_column($unfiltered->json('data'), 'id'));
+
+        foreach (['Albendafar', 'albendafar', 'ALBENDAFAR', 'bendafar'] as $search) {
+            $this->getJson($base.'?'.http_build_query(['search' => $search]))
+                ->assertOk()->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.id', $product->id);
+        }
+        $this->getJson($base.'?search=NoExiste')->assertOk()->assertJsonPath('meta.total', 0);
+    }
+
+    public function test_catalog_list_searches_all_pages_and_related_labels(): void
+    {
+        $this->withoutMiddleware();
+        $this->seedProductDomain();
+        $target = Concentracion::create(['valor' => 'Concentracion objetivo 2MG']);
+        for ($index = 1; $index <= 35; $index++) {
+            Concentracion::create(['valor' => 'Dosis distinta '.$index]);
+        }
+        $base = $this->productResourceBase('ConcentracionController').'/listar';
+        $this->getJson($base.'?search=OBJETIVO')->assertOk()
+            ->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.id', $target->id);
+        $active = PrincipalActivo::create(['nombre' => 'Sustancia buscada', 'concentracion' => $target->id]);
+        $this->getJson($this->productResourceBase('PrincipalActivoController').'/listar?search=objetivo')
+            ->assertOk()->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.id', $active->id);
+        $this->getJson($base.'?'.http_build_query(['search' => ['invalid']]))->assertUnprocessable();
+    }
+
+    public function test_product_list_searches_related_labels_without_losing_catalog_constraints(): void
+    {
+        $this->withoutMiddleware();
+        [$product] = $this->seedProductDomain();
+        $base = $this->productResourceBase('ProductController').'/listar';
+        $this->getJson($base.'?'.http_build_query(['search' => 'laboratorio prueba']))
+            ->assertOk()->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.id', $product->id);
+        $this->getJson($base.'?'.http_build_query(['search' => 'laboratorio prueba', 'laboratorio' => $product->laboratorio]))
+            ->assertOk()->assertJsonPath('meta.total', 1);
+    }
+
     public function test_product_filter_paginates_matching_products(): void
     {
         $this->withoutMiddleware();
@@ -1219,7 +1617,7 @@ class ProductDomainTest extends TestCase
         $this->getJson($base)->assertOk()->assertJsonCount(15, 'data')->assertJsonPath('meta.current_page', 1);
         $ids = [];
         foreach ([1 => 15, 2 => 15, 3 => 6, 4 => 0] as $page => $count) {
-            $response = $this->getJson($base.'?page='.$page.'&per_page=100')->assertOk()
+            $response = $this->getJson($base.'?page='.$page)->assertOk()
                 ->assertJsonCount($count, 'data')->assertJsonPath('meta.total', 36)
                 ->assertJsonPath('meta.current_page', $page)->assertJsonPath('meta.last_page', 3);
             foreach ($response->json('data') as $principle) {
@@ -1361,6 +1759,19 @@ class ProductDomainTest extends TestCase
         DB::table('permisos')->where('id', 1)->update(['lifetime' => null]);
         DB::table('actionsvistas')->where('id', 1)->update(['vista' => 2]);
         $this->assertSame(403, $middleware->handle($request, $next)->getStatusCode());
+
+        DB::table('actionsvistas')->where('id', 1)->update(['vista' => 1, 'codigo' => 'prdbtn02']);
+        $request->headers->set('Action-Btn', 'prdbtn02');
+        $this->assertSame(403, $middleware->handle($request, $next, 'prdbtn19')->getStatusCode());
+        $request->headers->set('Action-Btn', 'prdbtn19');
+        $this->assertSame(403, $middleware->handle($request, $next, 'prdbtn19')->getStatusCode());
+        DB::table('actionsvistas')->where('id', 1)->update(['codigo' => 'prdbtn19']);
+        $this->assertSame(200, $middleware->handle($request, $next, 'prdbtn19')->getStatusCode());
+        DB::table('permisos')->where('id', 1)->update(['lifetime' => now()->subMinute()]);
+        $this->assertSame(403, $middleware->handle($request, $next, 'prdbtn19')->getStatusCode());
+        $route = collect(app('router')->getRoutes()->getRoutes())->first(fn ($route) => $route->getActionMethod() === 'createChild');
+        $this->assertNotNull($route);
+        $this->assertContains(EnsureProductParentPermission::class.':prdbtn19', $route->gatherMiddleware());
     }
 
     public function test_product_parent_lookup_is_paginated_and_escapes_search(): void
@@ -1552,7 +1963,7 @@ class ProductDomainTest extends TestCase
         });
         Schema::create('prod_activo', function (Blueprint $table): void {
             $table->id();
-            $table->unsignedBigInteger('producto');
+            $table->foreignId('producto')->constrained('productos')->restrictOnDelete();
             $table->unsignedBigInteger('pactivo');
             $table->timestamps();
             $table->unique(['producto', 'pactivo'], 'uq_prod_activo');
@@ -1564,7 +1975,7 @@ class ProductDomainTest extends TestCase
         Schema::create('compra_detalle', function (Blueprint $table): void {
             $table->id();
             $table->unsignedBigInteger('compra');
-            $table->unsignedBigInteger('producto');
+            $table->foreignId('producto')->constrained('productos')->restrictOnDelete();
         });
     }
 }

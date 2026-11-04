@@ -24,7 +24,7 @@ final class EntityContract
         'transferencias' => ['id', 'tipo', 'stock_de', 'stock_para', 'usuario_envia', 'usuario_recibe', 'items', 'subtotal', 'isvtotal', 'total', 'estado', 'estado_recepcion', 'enviado_at', 'recibido_at', 'detalles'],
         'transferencias_tipo' => ['id', 'descripcion'],
         'transferencia_estado' => ['id', 'descripcion'],
-        'lotes' => ['id', 'producto', 'lote', 'fecha_elab', 'fecha_exp', 'costo', 'venta'],
+        'lotes' => ['id', 'producto', 'lote', 'fecha_elab', 'fecha_exp', 'costo', 'venta', 'valoracion'],
         'productos' => ['id', 'producto_padre_id', 'categoria', 'laboratorio', 'unidad', 'familia', 'codigo', 'codigobar', 'descripcion', 'estado', 'principios_activos', 'imagen_base64'],
         'principal_activos' => ['id', 'nombre', 'concentracion'],
         'clientepos' => ['id', 'nombre', 'rtn', 'telefono', 'direccion', 'tipo_documento', 'fecha_nacimiento'],

@@ -10,6 +10,7 @@ use App\Models\Farma\TransferenciaEstado;
 use App\Models\Farma\TransferenciaTipo;
 use App\Models\Stocks;
 use App\Services\Headquarters\ChangeRecorder;
+use Carbon\CarbonImmutable;
 use DomainException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -60,6 +61,15 @@ class TransferRepository implements TransferService
 
         $search = trim((string) ($filters['search'] ?? ''));
 
+        if (! empty($filters['fecha_desde'])) {
+            $query->where('enviado_at', '>=', $filters['fecha_desde'].' 00:00:00');
+        }
+
+        if (! empty($filters['fecha_hasta'])) {
+            $end = CarbonImmutable::createFromFormat('!Y-m-d', $filters['fecha_hasta'], 'America/Tegucigalpa')->addDay();
+            $query->where('enviado_at', '<', $end->toDateTimeString());
+        }
+
         if ($search !== '') {
             $like = "%{$search}%";
             $query->where(function (Builder $searchQuery) use ($search, $like): void {
@@ -68,14 +78,14 @@ class TransferRepository implements TransferService
                 }
 
                 $searchQuery
-                    ->orWhereHas('stockOrigen', fn (Builder $stock): Builder => $stock->where('descripcion', 'like', $like))
-                    ->orWhereHas('stockDestino', fn (Builder $stock): Builder => $stock->where('descripcion', 'like', $like))
-                    ->orWhereHas('usuarioEnvia', fn (Builder $user): Builder => $user->where('nombre', 'like', $like))
-                    ->orWhereHas('usuarioRecibe', fn (Builder $user): Builder => $user->where('nombre', 'like', $like))
-                    ->orWhereHas('detalles.loteDetalle', fn (Builder $lot): Builder => $lot->where('lote', 'like', $like))
+                    ->orWhereHas('stockOrigen', fn (Builder $stock): Builder => $stock->whereRaw('LOWER(descripcion) LIKE ?', [mb_strtolower($like)]))
+                    ->orWhereHas('stockDestino', fn (Builder $stock): Builder => $stock->whereRaw('LOWER(descripcion) LIKE ?', [mb_strtolower($like)]))
+                    ->orWhereHas('usuarioEnvia', fn (Builder $user): Builder => $user->whereRaw('LOWER(nombre) LIKE ?', [mb_strtolower($like)]))
+                    ->orWhereHas('usuarioRecibe', fn (Builder $user): Builder => $user->whereRaw('LOWER(nombre) LIKE ?', [mb_strtolower($like)]))
+                    ->orWhereHas('detalles.loteDetalle', fn (Builder $lot): Builder => $lot->whereRaw('LOWER(lote) LIKE ?', [mb_strtolower($like)]))
                     ->orWhereHas('detalles.loteDetalle.productoDetalle', fn (Builder $product): Builder => $product
-                        ->where('codigo', 'like', $like)
-                        ->orWhere('descripcion', 'like', $like));
+                        ->whereRaw('LOWER(codigo) LIKE ?', [mb_strtolower($like)])
+                        ->orWhereRaw('LOWER(descripcion) LIKE ?', [mb_strtolower($like)]));
             });
         }
 
@@ -256,8 +266,13 @@ class TransferRepository implements TransferService
     }
 
     /** @return array<string, mixed> */
-    public function options(int $stockId): array
+    public function options(int $stockId, bool $compact = false): array
     {
+        if ($compact) {
+            return ['stock_actual' => Stocks::query()->find($stockId, ['id', 'descripcion']),
+                'stocks_destino' => [], 'tipos' => [], 'estados' => [], 'estados_envio' => [], 'estados_recepcion' => []];
+        }
+
         return [
             'stock_actual' => Stocks::query()->find($stockId, ['id', 'descripcion']),
             'stocks_destino' => Stocks::query()
@@ -292,10 +307,10 @@ class TransferRepository implements TransferService
         if ($search !== '') {
             $like = "%{$search}%";
             $query->where(fn (Builder $filter): Builder => $filter
-                ->where('lote', 'like', $like)
+                ->whereRaw('LOWER(lote) LIKE ?', [mb_strtolower($like)])
                 ->orWhereHas('productoDetalle', fn (Builder $product): Builder => $product
-                    ->where('codigo', 'like', $like)
-                    ->orWhere('descripcion', 'like', $like)));
+                    ->whereRaw('LOWER(codigo) LIKE ?', [mb_strtolower($like)])
+                    ->orWhereRaw('LOWER(descripcion) LIKE ?', [mb_strtolower($like)])));
         }
 
         return $query->orderBy('fecha_exp')->orderBy('lote')->paginate(max(1, min($perPage, 100)));

@@ -2,8 +2,9 @@
 
 namespace App\Repositories\Traits;
 
-use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
+
 use function count;
 use function in_array;
 use function is_array;
@@ -13,7 +14,8 @@ trait QueryBuilderTrait
 {
     /**
      * Aplicar condiciones WHERE simples
-     * @param string $logicalOperator 'AND' o 'OR'
+     *
+     * @param  string  $logicalOperator  'AND' o 'OR'
      */
     protected function applyWhereConditions($query, array $conditions, string $logicalOperator = 'AND'): void
     {
@@ -36,7 +38,8 @@ trait QueryBuilderTrait
     /**
      * Aplicar condiciones complejas (LIKE, IN, etc)
      * Soporta condiciones con logicalOperator individual: [column, operator, value, logicalOperator]
-     * @param string $logicalOperator 'AND' o 'OR' - fallback si la condición no especifica uno
+     *
+     * @param  string  $logicalOperator  'AND' o 'OR' - fallback si la condición no especifica uno
      */
     protected function applyComplexConditions($query, array $conditions, string $logicalOperator = 'AND'): void
     {
@@ -76,7 +79,8 @@ trait QueryBuilderTrait
 
     /**
      * Aplicar una condición individual
-     * @param string $logicalOperator 'AND' u 'OR' - solo se usa si no es la primera condición
+     *
+     * @param  string  $logicalOperator  'AND' u 'OR' - solo se usa si no es la primera condición
      */
     protected function applyCondition($query, string $column, string $operator, $value, string $logicalOperator = 'AND'): void
     {
@@ -86,12 +90,20 @@ trait QueryBuilderTrait
         // Validar operador permitido
         $allowedOperators = ['=', '!=', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE', 'IN', 'NOT IN', 'BETWEEN', 'IS', 'IS NOT'];
 
-        if (!in_array($operator, $allowedOperators, true)) {
+        if (! in_array($operator, $allowedOperators, true)) {
             $operator = '=';
         }
 
         // Manejar operadores especiales
         switch ($operator) {
+            case 'LIKE':
+            case 'NOT LIKE':
+                $builder = $query instanceof EloquentBuilder ? $query->getQuery() : $query;
+                $wrapped = $builder->getGrammar()->wrap($column);
+                $method = $isOrCondition ? 'orWhereRaw' : 'whereRaw';
+                $query->$method('LOWER('.$wrapped.') '.$operator.' ?', [mb_strtolower((string) $value)]);
+                break;
+
             case 'IN':
             case 'NOT IN':
                 if (is_array($value)) {
@@ -142,7 +154,7 @@ trait QueryBuilderTrait
     protected function applyJoins($query, array $tables): void
     {
         foreach ($tables as $join) {
-            if (!is_array($join)) {
+            if (! is_array($join)) {
                 continue;
             }
 
@@ -152,12 +164,12 @@ trait QueryBuilderTrait
             $second = $join['second'] ?? null;
             $type = strtolower($join['type'] ?? 'inner');
 
-            if (!$joinTable || !$first || !$second) {
+            if (! $joinTable || ! $first || ! $second) {
                 continue;
             }
 
             // Validar tipo de JOIN
-            if (!in_array($type, ['inner', 'left', 'right', 'cross'], true)) {
+            if (! in_array($type, ['inner', 'left', 'right', 'cross'], true)) {
                 $type = 'inner';
             }
 
@@ -187,7 +199,7 @@ trait QueryBuilderTrait
         return count($conditions) === 3
             && isset($conditions[0], $conditions[1], $conditions[2])
             && is_string($conditions[0])
-            && !is_array($conditions[0]);
+            && ! is_array($conditions[0]);
     }
 
     /**
@@ -195,18 +207,19 @@ trait QueryBuilderTrait
      */
     protected function isMultipleConditions(array $conditions): bool
     {
-        if (empty($conditions) || !array_is_list($conditions)) {
+        if (empty($conditions) || ! array_is_list($conditions)) {
             return false;
         }
 
         $firstElement = reset($conditions);
+
         return is_array($firstElement);
     }
 
     /**
      * Aplicar paginación con límites seguros
      */
-    protected function applySafePagination($query, ?int $perPage = null): \Illuminate\Contracts\Pagination\LengthAwarePaginator
+    protected function applySafePagination($query, ?int $perPage = null): LengthAwarePaginator
     {
         $perPage ??= $this->perPage;
         $perPage = max(1, min($perPage, 100)); // Entre 1 y 100

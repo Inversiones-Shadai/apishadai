@@ -4,6 +4,7 @@ namespace App\Repositories\Farma;
 
 use App\Interfaces\Farma\LotService;
 use App\Models\Farma\Lote;
+use App\Support\TableSearch;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -23,7 +24,7 @@ class LotRepository implements LotService
             ->with([
                 'productoDetalle' => static fn ($product) => $product
                     ->select(['id', 'codigo', 'descripcion', 'laboratorio', 'familia'])
-                    ->selectRaw('imagen IS NOT NULL AS tiene_imagen'),
+                    ->selectRaw('imagen IS NOT NULL AND imagen <> \'\' AS tiene_imagen, CASE WHEN LENGTH(imagen) = 36 THEN imagen ELSE NULL END AS imagen_uuid'),
                 'productoDetalle.laboratorioDetalle:id,nombre',
                 'productoDetalle.Familia:id,presentacion,administracion',
                 'productoDetalle.Familia.Presentacion:id,descripcion',
@@ -33,12 +34,7 @@ class LotRepository implements LotService
 
         if ($search !== '') {
             $query->whereHas('productoDetalle', static function (Builder $product) use ($search): void {
-                $product->where(static function (Builder $product) use ($search): void {
-                    $product
-                        ->where('codigo', 'like', "%{$search}%")
-                        ->orWhere('descripcion', 'like', "%{$search}%")
-                        ->orWhereHas('laboratorioDetalle', static fn (Builder $laboratory): Builder => $laboratory->where('nombre', 'like', "%{$search}%"));
-                });
+                TableSearch::apply($product, $search, ['codigo', 'descripcion'], ['laboratorioDetalle' => ['nombre']]);
             });
         }
 

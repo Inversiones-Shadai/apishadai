@@ -12,6 +12,6 @@ interface TransferService
     public function send(int $originStockId, int $userId, array $data): Transferencia;
     public function updateDetails(int $id, int $originStockId, array $data): Transferencia;
     public function receive(int $id, int $destinationStockId, int $userId): ?Transferencia;
-    public function options(int $stockId): array;
+    public function options(int $stockId, bool $compact = false): array;
     public function paginateLots(int $perPage = 30, string $search = '', ?int $productId = null): LengthAwarePaginator;
 }

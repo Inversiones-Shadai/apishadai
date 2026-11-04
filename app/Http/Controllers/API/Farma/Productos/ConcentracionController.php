@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API\Farma\Productos;
 use App\DTO\Farma\ConcentracionData;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Productos\ConcentracionRequest;
+use App\Http\Requests\Util\TableSearchRequest;
 use App\Http\Resources\Farma\ConcentracionResource;
 use App\Interfaces\Farma\ConcentracionService;
 use Illuminate\Database\QueryException;
@@ -15,10 +16,10 @@ class ConcentracionController extends Controller
 {
     public function __construct(private readonly ConcentracionService $repository) {}
 
-    public function index(): JsonResponse
+    public function index(TableSearchRequest $request): JsonResponse
     {
         return $this->sendResponse(
-            ConcentracionResource::collection($this->repository->paginate()),
+            ConcentracionResource::collection($this->repository->searchPage((string) $request->validated('search', ''), ['id', 'valor'], [])),
             'ok',
             200,
             true,

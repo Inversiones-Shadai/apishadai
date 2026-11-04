@@ -9,6 +9,7 @@ use App\Http\Resources\Farma\TransferResource;
 use App\Interfaces\Config\DeviceInfoService;
 use App\Interfaces\Farma\TransferService;
 use App\Models\Farma\TransferenciaTipo;
+use App\Services\Farma\TransferProductConversion;
 use App\Services\Farma\TransferStockScope;
 use DomainException;
 use Illuminate\Http\JsonResponse;
@@ -38,6 +39,8 @@ class TransferController extends Controller
             'estado' => ['nullable', 'integer', 'exists:transferencia_estado,id'],
             'estado_recepcion' => ['nullable', 'integer', 'exists:transferencia_estado,id'],
             'tipo' => ['nullable', 'integer', 'exists:transferencias_tipo,id'],
+            'fecha_desde' => ['nullable', 'date_format:Y-m-d'],
+            'fecha_hasta' => array_merge(['nullable', 'date_format:Y-m-d'], $request->filled('fecha_desde') ? ['after_or_equal:fecha_desde'] : []),
         ]);
 
         $response = $this->sendResponse(
@@ -52,9 +55,9 @@ class TransferController extends Controller
         );
 
         $payload = $response->getData(true);
-        $payload['meta']['tipos'] = TransferenciaTipo::query()->orderBy('descripcion')->get(['id', 'descripcion'])->toArray();
+        $payload['meta']['tipos'] = $request->boolean('compact') ? [] : TransferenciaTipo::query()->orderBy('descripcion')->get(['id', 'descripcion'])->toArray();
 
-        if ($scope->canFilter($request)) {
+        if (! $request->boolean('compact') && $scope->canFilter($request)) {
             $payload['meta']['stocks'] = $scope->stocks();
         }
 
@@ -82,7 +85,7 @@ class TransferController extends Controller
 
         return $stockId === null
             ? $this->sendError('El dispositivo no tiene un stock válido asignado.', null, 422)
-            : $this->sendResponse($this->repository->options($stockId), 'ok');
+            : $this->sendResponse($this->repository->options($stockId, $request->boolean('compact')), 'ok');
     }
 
     public function lots(Request $request): JsonResponse
@@ -124,6 +127,41 @@ class TransferController extends Controller
             $this->logError('TransferController send', $throwable);
 
             return $this->sendError('No se pudo guardar la transferencia.', null, 500);
+        }
+    }
+
+    public function conversionOptions(Request $request, int $id, TransferProductConversion $conversion): JsonResponse
+    {
+        if ($this->stockId($request) === null) {
+            return $this->sendError('El dispositivo no tiene un stock válido asignado.', null, 422);
+        }
+        try {
+            return $this->sendResponse($conversion->options($id, $request->boolean('compact')), 'ok');
+        } catch (DomainException $exception) {
+            return $this->sendError($exception->getMessage(), null, 422);
+        }
+    }
+
+    public function convertProduct(Request $request, TransferProductConversion $conversion): JsonResponse
+    {
+        $stockId = $this->stockId($request);
+        $userId = $request->user()?->getAuthIdentifier();
+        if ($stockId === null || $userId === null) {
+            return $this->sendError('No fue posible identificar al usuario y stock de origen.', null, 422);
+        }
+        $validated = $request->validate([
+            'request_id' => ['required', 'uuid'],
+            'lote_padre' => ['required', 'integer', 'min:1'],
+            'producto_hijo' => ['required', 'integer', 'min:1'],
+            'cantidad' => ['required', 'integer', 'min:1', 'max:999'],
+        ]);
+        foreach (['lote_padre', 'producto_hijo', 'cantidad'] as $field) {
+            $validated[$field] = (int) $validated[$field];
+        }
+        try {
+            return $this->sendResponse($conversion->convert($stockId, (int) $userId, $validated), 'Producto convertido correctamente.');
+        } catch (DomainException $exception) {
+            return $this->sendError($exception->getMessage(), null, 422);
         }
     }
 

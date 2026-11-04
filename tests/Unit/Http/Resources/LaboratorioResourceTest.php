@@ -5,7 +5,7 @@ namespace Tests\Unit\Http\Resources;
 use App\Http\Resources\Laboratorios\LaboratorioResource;
 use App\Models\Laboratorio;
 use Illuminate\Http\Request;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 class LaboratorioResourceTest extends TestCase
 {

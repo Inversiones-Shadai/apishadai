@@ -8,6 +8,7 @@ use App\Interfaces\Config\VistaEstadosService;
 use App\Interfaces\Config\VistaRepositoryInterface;
 use App\Models\Vistas;
 use App\Repositories\Repository;
+use App\Support\TableSearch;
 
 class VistaRepository extends Repository implements VistaRepositoryInterface
 {
@@ -26,9 +27,10 @@ class VistaRepository extends Repository implements VistaRepositoryInterface
         return $this->whereFirst(['nombre' => $name, 'modulo' => $module]);
     }
 
-    public function findbyModule(int $moduleId)
+    public function findbyModule(int $moduleId, string $search = '')
     {
-        return $this->whereList(['modulo' => $moduleId]);
+        return TableSearch::apply($this->buildBaseQuery()->where('modulo', $moduleId), $search,
+            ['nombre', 'codigo'], ['Estado' => ['descripcion'], 'Modulo' => ['nombre']])->get();
     }
 
     public function findByModuloId(int $moduloId)

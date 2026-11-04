@@ -81,11 +81,34 @@ class LotDomainTest extends TestCase
         $this->assertSame(8, $first['cantidad_total']);
 
         $lots = DistributionLotResource::collection($repository->productLots(1))->resolve(request());
-        $this->assertTrue($lots[0]['configurado']);
-        $this->assertSame(50.0, $lots[0]['costo']);
-        $this->assertTrue($lots[0]['isv']);
-        $this->assertSame(125.5, $lots[0]['distribucion']['precio']);
-        $this->assertFalse($lots[1]['configurado']);
+        $this->assertSame('LOTE-B', $lots[0]['lote']);
+        $this->assertFalse($lots[0]['configurado']);
+        $this->assertTrue($lots[1]['configurado']);
+        $this->assertSame(50.0, $lots[1]['costo']);
+        $this->assertTrue($lots[1]['isv']);
+        $this->assertSame(125.5, $lots[1]['distribucion']['precio']);
+    }
+
+    public function test_distribution_prioritizes_products_with_pending_lots_before_pagination_and_search(): void
+    {
+        $repository = new DistributionRepository(new Lote, new Distribucion);
+        DB::table('lotes')->whereIn('id', [1, 2])->update(['created_at' => '2026-10-01 09:00:00']);
+        DB::table('lotes')->where('id', 3)->update(['created_at' => '2026-10-03 09:00:00']);
+        DB::table('distribucion')->insert([
+            'lote' => 3, 'precio' => 30, 'isv' => false,
+            'dto1' => 0, 'dto2' => 0, 'dto3' => 0, 'dto4' => 0,
+        ]);
+
+        $this->assertSame([1, 2], $repository->paginateProducts()->getCollection()->pluck('producto')->all());
+        $this->assertSame([1, 2], $repository->paginateProducts(30, 'Laboratorio')->getCollection()->pluck('producto')->all());
+        $this->assertSame([2], $repository->paginateProducts(30, 'Ibuprofeno')->getCollection()->pluck('producto')->all());
+        $this->assertSame([1], $repository->paginateProducts(1)->getCollection()->pluck('producto')->all());
+        request()->merge(['page' => 2]);
+        $this->assertSame([2], $repository->paginateProducts(1)->getCollection()->pluck('producto')->all());
+
+        request()->merge(['page' => 1]);
+        $repository->saveForLot(2, ['precio' => 90, 'dto1' => 0, 'dto2' => 0, 'dto3' => 0, 'dto4' => 0]);
+        $this->assertSame([2, 1], $repository->paginateProducts()->getCollection()->pluck('producto')->all());
     }
 
     public function test_distribution_orders_products_by_latest_lot_entry_before_pagination_and_search(): void
@@ -199,6 +222,8 @@ class LotDomainTest extends TestCase
             $table->decimal('dto4', 4, 2);
             $table->timestamps();
         });
+        (require base_path('database/migrations/2026_10_31_000001_distribution_promotions.php'))->up();
+        (require base_path('database/migrations/2026_10_31_000002_distribution_promotion_stocks.php'))->up();
     }
 
     private function seedLots(): void

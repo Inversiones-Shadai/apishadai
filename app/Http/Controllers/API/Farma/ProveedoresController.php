@@ -6,22 +6,24 @@ use App\DTO\ProveedoresDTO;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Farma\Proveedores\ProveedoresRequest;
 use App\Http\Requests\Farma\Proveedores\ProveedoresUpdateRequest;
+use App\Http\Requests\Util\TableSearchRequest;
 use App\Http\Resources\Proveedores\ProveedoresResource;
 use App\Interfaces\Proveedores\ProveedoresService;
+use App\Services\Images\ImageStorage;
 use App\Utils\Services\Base64UtilityService;
 use Illuminate\Http\JsonResponse;
 
 class ProveedoresController extends Controller
 {
     public function __construct(
-        private readonly  ProveedoresService $service,
+        private readonly ProveedoresService $service,
         private readonly Base64UtilityService $base64UtilityService
     ) {}
 
-    public function index(): JsonResponse
+    public function index(TableSearchRequest $request): JsonResponse
     {
         try {
-            $list = $this->service->paginate();
+            $list = $this->service->searchPage((string) $request->validated('search', ''), ['nombre', 'telefono', 'direccion'], []);
 
             return $this->sendResponse(ProveedoresResource::collection($list), 'ok', 200, true);
         } catch (\Throwable $th) {
@@ -129,6 +131,7 @@ class ProveedoresController extends Controller
     {
         try {
             $image = $this->service->getImage($id);
+            $image = app(ImageStorage::class)->base64($image);
 
             if (! $image) {
                 return $this->sendError('Imagen no encontrada', null, 404);

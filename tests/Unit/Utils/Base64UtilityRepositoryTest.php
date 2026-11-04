@@ -14,7 +14,7 @@ class Base64UtilityRepositoryTest extends TestCase
         ob_start();
         imagepng($image);
         $png = ob_get_clean();
-        imagedestroy($image);
+        unset($image);
 
         $this->assertIsString($png);
         $result = (new Base64UtilityRepository)->sanitize(
@@ -43,7 +43,7 @@ class Base64UtilityRepositoryTest extends TestCase
         ob_start();
         imagepng($image);
         $png = ob_get_clean();
-        imagedestroy($image);
+        unset($image);
 
         $this->assertIsString($png);
         $this->assertIsString((new Base64UtilityRepository)->sanitize(
@@ -64,7 +64,7 @@ class Base64UtilityRepositoryTest extends TestCase
         ob_start();
         imagepng($image, null, 9, PNG_ALL_FILTERS);
         $png = ob_get_clean();
-        imagedestroy($image);
+        unset($image);
 
         $this->assertIsString($png);
         $base64 = base64_encode($png);

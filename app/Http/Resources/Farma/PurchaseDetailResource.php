@@ -19,6 +19,7 @@ class PurchaseDetailResource extends JsonResource
         return [
             'id' => (int) $this->id,
             'producto_id' => (int) $this->producto,
+            'es_bonificacion' => (bool) $this->es_bonificacion,
             'cantidad' => (int) $this->cantidad,
             'lote' => (string) $this->lote,
             'fecha_elaboracion' => $this->fecha_elaboracion?->format('Y-m-d'),

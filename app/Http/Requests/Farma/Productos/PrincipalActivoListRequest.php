@@ -10,6 +10,8 @@ class PrincipalActivoListRequest extends BaseRequest
     {
         return [
             'page' => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'min:1', 'max:50'],
+            'search' => ['nullable', 'string', 'max:255'],
             'all' => ['sometimes', 'boolean'],
         ];
     }

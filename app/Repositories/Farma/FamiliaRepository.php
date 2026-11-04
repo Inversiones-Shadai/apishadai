@@ -9,6 +9,7 @@ use App\Interfaces\Farma\FamPresentacionService;
 use App\Models\Farma\Familia;
 use App\Repositories\Repository;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Pagination\LengthAwarePaginator;
 
 class FamiliaRepository extends Repository implements FamiliaService
 {
@@ -21,6 +22,16 @@ class FamiliaRepository extends Repository implements FamiliaService
         $this->perPage = 30;
         $this->orderBy = ['id', 'DESC'];
         $this->defaultRelations = ['Presentacion', 'Administracion'];
+    }
+
+    public function lookupPage(string $search, int $perPage = 30): LengthAwarePaginator
+    {
+        $this->setPerPage(max(1, min(50, $perPage)));
+
+        return $this->searchPage($search, ['descripcion'], [
+            'Presentacion' => ['descripcion'],
+            'Administracion' => ['descripcion'],
+        ]);
     }
 
     public function administraciones(): Collection

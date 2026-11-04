@@ -4,33 +4,36 @@ namespace App\Repositories;
 
 use App\Interfaces\RepositoryInterface;
 use App\Models\Utils\Filter\FilterModel;
-use App\Repositories\Traits\{
-    QueryBuilderTrait,
-    ConditionHandlerTrait,
-    RelationHandlerTrait,
-    ErrorHandlerTrait
-};
+use App\Repositories\Traits\ConditionHandlerTrait;
+use App\Repositories\Traits\ErrorHandlerTrait;
+use App\Repositories\Traits\QueryBuilderTrait;
+use App\Repositories\Traits\RelationHandlerTrait;
+use App\Support\TableSearch;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
-
+use Illuminate\Support\Facades\Log;
 
 use function is_array;
 use function is_string;
 
-
 abstract class Repository implements RepositoryInterface
 {
-    use QueryBuilderTrait,
-        ConditionHandlerTrait,
-        RelationHandlerTrait,
-        ErrorHandlerTrait;
+    use ConditionHandlerTrait,
+        ErrorHandlerTrait,
+        QueryBuilderTrait,
+        RelationHandlerTrait;
 
     protected Model $model;
+
     protected array $defaultRelations = [];
+
     protected int $perPage = 15;
-    protected array $orderBy = ["id", "DESC"];
+
+    protected array $orderBy = ['id', 'DESC'];
+
     protected bool $useQueryBuilder = false; // Flag para decidir entre DB y Eloquent
 
     public function __construct(Model $model)
@@ -59,7 +62,7 @@ abstract class Repository implements RepositoryInterface
             return $this->buildBaseQuery()
                 ->orderBy($orderColumn, $orderDirection)
                 ->get();
-        }, 'getAll', new Collection());
+        }, 'getAll', new Collection);
     }
 
     /**
@@ -82,6 +85,21 @@ abstract class Repository implements RepositoryInterface
                 ->orderBy($orderColumn, $orderDirection)
                 ->paginate($this->perPage);
         }, 'paginate', $this->getEmptyPaginator());
+    }
+
+    /** @param list<string> $columns @param array<string, list<string>> $relations */
+    public function searchPage(string $search, array $columns, array $relations = []): LengthAwarePaginator
+    {
+        if (trim($search) === '') {
+            return $this->paginate();
+        }
+
+        return $this->executeQuery(function () use ($search, $columns, $relations) {
+            [$column, $direction] = $this->getNormalizedOrderBy();
+
+            return TableSearch::apply($this->buildBaseQuery(), $search, $columns, $relations)
+                ->orderBy($column, $direction)->paginate($this->perPage);
+        }, 'searchPage', $this->getEmptyPaginator());
     }
 
     /**
@@ -109,8 +127,8 @@ abstract class Repository implements RepositoryInterface
     {
         $result = $this->findById($id);
 
-        if (!$result) {
-            throw new \Illuminate\Database\Eloquent\ModelNotFoundException(
+        if (! $result) {
+            throw new ModelNotFoundException(
                 "No query results for model [{$this->getModelClass()}] with ID {$id}"
             );
         }
@@ -144,7 +162,7 @@ abstract class Repository implements RepositoryInterface
             $filtered = $this->filterEmptyData($data);
 
             if (empty($filtered)) {
-                throw new \InvalidArgumentException("No hay datos para actualizar");
+                throw new \InvalidArgumentException('No hay datos para actualizar');
             }
 
             $sanitized = $this->sanitizeData($filtered);
@@ -166,10 +184,9 @@ abstract class Repository implements RepositoryInterface
                 ->lockForUpdate()
                 ->first();
 
-            if (!$model) {
+            if (! $model) {
                 throw new \Exception("Registro no encontrado con ID: $id");
             }
-
 
             return $model->update($sanitized);
         }, 'update', ['id' => $id, 'data' => $data]);
@@ -198,7 +215,7 @@ abstract class Repository implements RepositoryInterface
                 ->lockForUpdate()
                 ->first();
 
-            if (!$model) {
+            if (! $model) {
                 throw new \Exception("Registro no encontrado con ID: $id");
             }
 
@@ -217,7 +234,8 @@ abstract class Repository implements RepositoryInterface
             if ($this->useQueryBuilder) {
                 $query = DB::table($this->getTableName());
                 $this->applyWhereConditions($query, $sanitized);
-                \Illuminate\Support\Facades\Log::debug('Repository::exists() - Query SQL (QueryBuilder):', ['sql' => $query->toSql(), 'bindings' => $query->getBindings()]);
+                Log::debug('Repository::exists() - Query SQL (QueryBuilder):', ['sql' => $query->toSql(), 'bindings' => $query->getBindings()]);
+
                 return $query->exists();
             }
 
@@ -230,13 +248,13 @@ abstract class Repository implements RepositoryInterface
 
     /**
      * Listar con condiciones y paginación
-     * @param array $conditions Condiciones a aplicar
-     * @param bool $usePagination Usar paginación
-     * @param string $logicalOperator 'AND' o 'OR' para múltiples condiciones (por defecto 'AND')
+     *
+     * @param  array  $conditions  Condiciones a aplicar
+     * @param  bool  $usePagination  Usar paginación
+     * @param  string  $logicalOperator  'AND' o 'OR' para múltiples condiciones (por defecto 'AND')
      */
     public function whereList(array $conditions, bool $usePagination = false, string $logicalOperator = 'AND'): Collection|LengthAwarePaginator
     {
-
 
         return $this->executeQuery(function () use ($conditions, $usePagination, $logicalOperator) {
             $sanitized = $this->sanitizeConditions($conditions);
@@ -280,11 +298,10 @@ abstract class Repository implements RepositoryInterface
         }, 'whereList', $this->getEmptyPaginator(), ['conditions' => $conditions]);
     }
 
-
-
     /**
      * Buscar el primer registro con condiciones
-     * @param string $logicalOperator 'AND' o 'OR' para múltiples condiciones
+     *
+     * @param  string  $logicalOperator  'AND' o 'OR' para múltiples condiciones
      */
     public function whereFirst(array $conditions, string $logicalOperator = 'AND'): ?Model
     {
@@ -313,10 +330,9 @@ abstract class Repository implements RepositoryInterface
         }, 'whereFirst', null, ['conditions' => $conditions]);
     }
 
-        /**
+    /**
      * Listar con FilterModel - construye condiciones con logicalOperator individual
      */
-
     public function filterAll(FilterModel $filterModel, bool $usePagination = false): Collection|LengthAwarePaginator
     {
         $conditions = [];
@@ -330,7 +346,7 @@ abstract class Repository implements RepositoryInterface
         return $this->whereList($conditions, $usePagination);
     }
 
-       /**
+    /**
      * Buscar primer registro con FilterModel - construye condiciones con logicalOperator individual
      */
     public function filterOne(FilterModel $filterModel): ?Model
@@ -369,10 +385,10 @@ abstract class Repository implements RepositoryInterface
             $this->applyComplexConditions($query, $sanitized);
 
             // Aplicar selects
-            if (!empty($selects)) {
+            if (! empty($selects)) {
                 $query->select($this->sanitizeSelects($selects));
             } else {
-                $query->select($this->getTableName() . '.*');
+                $query->select($this->getTableName().'.*');
             }
 
             if ($usePagination) {
@@ -386,14 +402,14 @@ abstract class Repository implements RepositoryInterface
                 [$orderColumn, $orderDirection] = $this->getNormalizedOrderBy();
                 $orderColumn = $this->qualifyOrderColumnForCurrentTable($orderColumn);
 
-                return  $query
+                return $query
                     ->orderBy($orderColumn, $orderDirection)
                     ->get();
             }
         }, 'joinWhereList', $this->getEmptyPaginator(), [
             'conditions' => $conditions,
             'tables' => $tables,
-            'selects' => $selects
+            'selects' => $selects,
         ]);
     }
 
@@ -416,10 +432,10 @@ abstract class Repository implements RepositoryInterface
             $this->applyJoins($query, $sanitizedJoins);
             $this->applyComplexConditions($query, $sanitized);
 
-            if (!empty($selects)) {
+            if (! empty($selects)) {
                 $query->select($this->sanitizeSelects($selects));
             } else {
-                $query->select($this->getTableName() . '.*');
+                $query->select($this->getTableName().'.*');
             }
 
             [$orderColumn, $orderDirection] = $this->getNormalizedOrderBy();
@@ -437,7 +453,7 @@ abstract class Repository implements RepositoryInterface
         }, 'joinWhereFirst', null, [
             'conditions' => $conditions,
             'tables' => $tables,
-            'selects' => $selects
+            'selects' => $selects,
         ]);
     }
 
@@ -447,9 +463,16 @@ abstract class Repository implements RepositoryInterface
     protected function filterEmptyData(array $data): array
     {
         return array_filter($data, function ($value) {
-            if ($value === null) return false;
-            if (is_string($value) && trim($value) === '') return false;
-            if (is_array($value) && empty($value)) return false;
+            if ($value === null) {
+                return false;
+            }
+            if (is_string($value) && trim($value) === '') {
+                return false;
+            }
+            if (is_array($value) && empty($value)) {
+                return false;
+            }
+
             return true;
         });
     }
@@ -461,7 +484,7 @@ abstract class Repository implements RepositoryInterface
     {
         $query = $this->model->newQuery();
 
-        if (!empty($this->defaultRelations)) {
+        if (! empty($this->defaultRelations)) {
             $query->with($this->defaultRelations);
         }
 
@@ -491,6 +514,7 @@ abstract class Repository implements RepositoryInterface
     {
         $model = $this->model->newInstance();
         $model->setRawAttributes((array) $data, true);
+
         return $model;
     }
 
@@ -526,7 +550,7 @@ abstract class Repository implements RepositoryInterface
      */
     private function qualifyOrderColumnForCurrentTable(string $column): string
     {
-        return str_contains($column, '.') ? $column : $this->getTableName() . '.' . $column;
+        return str_contains($column, '.') ? $column : $this->getTableName().'.'.$column;
     }
 
     /**
@@ -535,6 +559,7 @@ abstract class Repository implements RepositoryInterface
     public function useQueryBuilder(bool $use = true)
     {
         $this->useQueryBuilder = $use;
+
         return $this;
     }
 
@@ -544,6 +569,7 @@ abstract class Repository implements RepositoryInterface
     public function setDefaultRelations(array $relations)
     {
         $this->defaultRelations = $relations;
+
         return $this;
     }
 
@@ -553,6 +579,7 @@ abstract class Repository implements RepositoryInterface
     public function setPerPage(int $perPage)
     {
         $this->perPage = max(1, min($perPage, 100)); // Límite entre 1 y 100
+
         return $this;
     }
 
@@ -563,8 +590,9 @@ abstract class Repository implements RepositoryInterface
     {
         $this->orderBy = [
             $this->sanitizeColumnName($column),
-            strtoupper($direction) === 'ASC' ? 'ASC' : 'DESC'
+            strtoupper($direction) === 'ASC' ? 'ASC' : 'DESC',
         ];
+
         return $this;
     }
 }

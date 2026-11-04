@@ -24,15 +24,7 @@ class DistributionLotResource extends JsonResource
                 'nro' => (string) $this->compraDetalle->nro,
             ],
             'configurado' => $distribution !== null,
-            'distribucion' => $distribution === null ? null : [
-                'id' => (int) $distribution->id,
-                'precio' => (float) $distribution->precio,
-                'isv' => (bool) $distribution->isv,
-                'dto1' => (float) $distribution->dto1,
-                'dto2' => (float) $distribution->dto2,
-                'dto3' => (float) $distribution->dto3,
-                'dto4' => (float) $distribution->dto4,
-            ],
+            'distribucion' => $distribution === null ? null : (new DistributionResource($distribution))->toArray($request),
         ];
     }
 }

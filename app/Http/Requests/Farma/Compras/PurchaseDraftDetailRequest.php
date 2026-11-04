@@ -22,7 +22,8 @@ class PurchaseDraftDetailRequest extends BaseRequest
 
         return [
             'id' => ['nullable', 'integer', Rule::exists('compra_detalle', 'id')->where('compra', $purchase)],
-            'producto' => ['required', 'integer', 'exists:productos,id', Rule::unique('compra_detalle', 'producto')->where('compra', $purchase)->ignore($this->integer('id'))],
+            'producto' => ['required', 'integer', 'exists:productos,id'],
+            'es_bonificacion' => ['sometimes', 'boolean'],
             'cantidad' => ['required', 'integer', 'min:1', 'max:1000000'],
             'lote' => ['nullable', 'string', 'max:100'],
             'fecha_elaboracion' => ['nullable', 'date_format:Y-m-d'],
@@ -42,7 +43,6 @@ class PurchaseDraftDetailRequest extends BaseRequest
         return [
             '*.required' => 'El campo :attribute es obligatorio.',
             '*.exists' => 'El registro seleccionado no existe o no pertenece a esta compra.',
-            'producto.unique' => 'El producto ya está agregado a esta compra.',
         ];
     }
 }

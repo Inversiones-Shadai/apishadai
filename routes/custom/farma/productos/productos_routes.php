@@ -10,6 +10,8 @@ Route::prefix('producto')->group(
         Route::get('/listar', [ProductController::class, 'index']);
         Route::get('/filter_productos', [ProductController::class, 'filterProductos']);
         Route::post('/crear', [ProductController::class, 'store']);
+        Route::post('/crear-hijo/{id}', [ProductController::class, 'createChild'])->whereNumber('id')
+            ->middleware(EnsureProductParentPermission::class.':prdbtn19');
         Route::get('/buscar/{id}', [ProductController::class, 'show'])->whereNumber('id');
         Route::put('/actualizar/{id}', [ProductController::class, 'update'])->whereNumber('id');
         Route::delete('/eliminar/{id}', [ProductController::class, 'destroy'])->whereNumber('id');

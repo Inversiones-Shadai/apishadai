@@ -6,12 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Pos\PosDiscountRequest;
 use App\Http\Resources\Pos\PosManagementResource;
 use App\Repositories\Pos\PosDiscountRepository;
+use App\Services\Images\ImageStorage;
 use App\Utils\Services\Base64UtilityService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
@@ -71,6 +73,9 @@ class PosDiscountController extends Controller
         if ($stored === null || $stored === '') {
             return null;
         }
+        if (Str::isUuid($stored)) {
+            return app(ImageStorage::class)->url($stored);
+        }
         $base64 = app(Base64UtilityService::class)->validate($stored);
         if ($base64 === null) {
             return null;
@@ -102,8 +107,7 @@ class PosDiscountController extends Controller
 
             return 'data:image/png;base64,'.base64_encode($png);
         } finally {
-            imagedestroy($source);
-            imagedestroy($thumbnail);
+            unset($source, $thumbnail);
         }
     }
 

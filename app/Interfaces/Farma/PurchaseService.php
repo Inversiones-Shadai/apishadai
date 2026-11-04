@@ -3,11 +3,18 @@
 namespace App\Interfaces\Farma;
 
 use App\Models\Farma\Compra;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 
 interface PurchaseService
 {
     public function paginate(int $perPage = 30, string $search = ''): LengthAwarePaginator;
+
+    /** @return array{purchases: LengthAwarePaginator, totals: array<string, float>} */
+    public function report(int $perPage = 30, string $search = '', ?int $provider = null, ?int $type = null): array;
+
+    /** @return Collection<int, Compra> */
+    public function exportPage(string $search = '', ?int $provider = null, ?int $type = null, ?int $before = null): Collection;
 
     public function find(int $id): ?Compra;
 
