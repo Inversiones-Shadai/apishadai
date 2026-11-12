@@ -1,10 +1,22 @@
 <?php
 
 use App\Http\Controllers\API\Farma\InventoryMatrixController;
+use App\Http\Controllers\API\Farma\LostSaleReportController;
 use App\Http\Controllers\API\Farma\TaskController;
+use App\Http\Controllers\API\Farma\SaleAlertController;
+use App\Http\Middleware\EnsureSaleAlertPermission;
 use App\Http\Middleware\EnsureInventoryMatrixPermission;
 use App\Http\Middleware\EnsureTaskPermission;
 use Illuminate\Support\Facades\Route;
+
+Route::prefix('farma/alertas-venta')->group(function (): void {
+    Route::get('/', [SaleAlertController::class, 'index'])->middleware(EnsureSaleAlertPermission::class.':avtbtn01');
+    Route::post('/', [SaleAlertController::class, 'store'])->middleware(EnsureSaleAlertPermission::class.':avtbtn02');
+    Route::put('/{id}', [SaleAlertController::class, 'update'])->whereNumber('id')->middleware(EnsureSaleAlertPermission::class.':avtbtn02');
+    Route::delete('/{id}', [SaleAlertController::class, 'destroy'])->whereNumber('id')->middleware(EnsureSaleAlertPermission::class.':avtbtn02');
+});
+
+Route::get('farma/reportes/ventas-perdidas', LostSaleReportController::class);
 
 Route::prefix('farma/tareas')->group(function (): void {
     $controller = TaskController::class;

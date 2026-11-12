@@ -4,6 +4,7 @@ namespace App\Services\Licensing;
 
 use Carbon\CarbonImmutable;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
@@ -29,7 +30,7 @@ class LicenseManager
         DB::transaction(function () use ($data, $key, $id, $actor, $months, $startsAt, $expiresAt, $period): void {
             DB::table('desktop_licenses')->insert([
                 'id' => $id, 'customer_id' => $period['customer_id'], 'label' => $data['label'], 'product' => $data['product'],
-                'key_hash' => hash('sha256', $key), 'key_suffix' => substr($key, -8),
+                'key_hash' => hash('sha256', $key), 'key_suffix' => substr($key, -8), 'key_encrypted' => Crypt::encryptString($key),
                 'seats' => $data['seats'], 'enabled' => true, 'expires_at' => $expiresAt,
                 'term_months' => $months, 'term_started_at' => $startsAt->utc(),
                 'created_by' => $actor, 'created_at' => now('UTC'), 'updated_at' => now('UTC'),

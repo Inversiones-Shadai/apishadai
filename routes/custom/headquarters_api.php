@@ -4,6 +4,7 @@ use App\Http\Controllers\API\DesktopUpdates\DesktopUpdateController;
 use App\Http\Controllers\API\Headquarters\InventoryControlController;
 use App\Http\Controllers\API\Headquarters\InventoryMatrixController;
 use App\Http\Controllers\API\Headquarters\PosProductLotController;
+use App\Http\Controllers\API\Headquarters\PosLostSaleController;
 use App\Http\Controllers\API\Headquarters\PosPurchaseController;
 use App\Http\Controllers\API\Headquarters\PosTaskController;
 use App\Http\Controllers\API\Headquarters\PosTransferController;
@@ -21,12 +22,14 @@ Route::prefix('headquarters')->withoutMiddleware([DeviceSecurityMiddleware::clas
         ->whereIn('action', ['activate', 'validate'])->middleware(HeadquartersPosSignatureMiddleware::class);
     Route::post('pos/tareas/{action}', [PosTaskController::class, 'handle'])
         ->whereIn('action', ['listar', 'estado'])->middleware(HeadquartersPosSignatureMiddleware::class);
+    Route::post('pos/ventas-perdidas', PosLostSaleController::class)->middleware(HeadquartersPosSignatureMiddleware::class);
     Route::post('pos/transferencias/{action}', [PosTransferController::class, 'handle'])
         ->whereIn('action', ['enviar', 'recibir', 'anular', 'confirmar-anulacion', 'listar'])
         ->middleware(HeadquartersPosSignatureMiddleware::class);
     Route::post('pos/productos/lotes-hijos/{action}', [PosProductLotController::class, 'handle'])
         ->whereIn('action', ['preparar', 'consultar'])->middleware(HeadquartersPosSignatureMiddleware::class);
     Route::post('pos/inventario/control/guardar', [InventoryControlController::class, 'handle'])->middleware(HeadquartersPosSignatureMiddleware::class);
+    Route::post('pos/inventario/matriz/sucursales', [InventoryMatrixController::class, 'branches'])->middleware(HeadquartersPosSignatureMiddleware::class);
     Route::post('pos/inventario/matriz/guardar', [InventoryMatrixController::class, 'handle'])->middleware(HeadquartersPosSignatureMiddleware::class);
     Route::post('pos/compras/{action}', [PosPurchaseController::class, 'handle'])
         ->whereIn('action', ['recibir', 'consultar', 'cancelar'])->middleware(HeadquartersPosSignatureMiddleware::class);

@@ -8,7 +8,7 @@ class ProductData
         public readonly int $categoria,
         public readonly int $laboratorio,
         public readonly int $unidad,
-        public readonly int $familia,
+        public readonly ?int $familia,
         public readonly string $codigo,
         public readonly ?string $codigobar,
         public readonly string $descripcion,
@@ -29,7 +29,7 @@ class ProductData
             categoria: (int) $validated['categoria']['id'],
             laboratorio: (int) $validated['laboratorio']['id'],
             unidad: (int) $validated['unidad']['id'],
-            familia: (int) $validated['familia']['id'],
+            familia: isset($validated['familia']['id']) ? (int) $validated['familia']['id'] : null,
             codigo: self::text((string) $validated['codigo']),
             codigobar: filled($validated['codigobar'] ?? null)
                 ? self::text((string) $validated['codigobar'])

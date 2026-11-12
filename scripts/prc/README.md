@@ -31,19 +31,26 @@ nombre; el resto se ingresa como presentación completa (1:1). No se confunden
 `unid` y `unid_frac` del sistema externo con las unidades locales. No se crean
 lotes, existencias, costos ni precios a partir de los campos cifrados del archivo.
 
+Configura `PRC_ARSA_REGISTER_URL` y `PRC_PRODUCT_IMAGE_BASE_URL` en `.env`
+con las URLs HTTPS de las fuentes. `PRC_IMPORT_DATABASE` identifica la base
+MySQL local autorizada. Los scripts PHP usan `PRC_IMPORT_DIRECTORY` cuando se
+omite el argumento del directorio.
+
 Ejecutar desde la raíz de apishadai:
 
 ```powershell
-python scripts/prc/fetch.py registers --directory storage/app/private/prc-import-20261022
-python scripts/prc/prepare.py --source C:/Users/USER/Desktop/prc-gbl.txt --directory storage/app/private/prc-import-20261022
+$source = '<ruta a prc-gbl.txt>'
+$directory = '<directorio de trabajo>'
+python scripts/prc/fetch.py registers --directory $directory
+python scripts/prc/prepare.py --source $source --directory $directory
 python scripts/prc/test_prepare.py
-php scripts/prc/import.php --directory=storage/app/private/prc-import-20261022
+php scripts/prc/import.php "--directory=$directory"
 # Aplicar el plan revisado; cada producto se confirma con su outbox en una transacción.
-php scripts/prc/import.php --directory=storage/app/private/prc-import-20261022 --apply
-python scripts/prc/fetch.py images --source C:/Users/USER/Desktop/prc-gbl.txt --directory storage/app/private/prc-import-20261022 --workers 8
-php scripts/prc/import.php --directory=storage/app/private/prc-import-20261022 --apply --images-only
-php scripts/prc/verify.php storage/app/private/prc-import-20261022
-python scripts/prc/report.py --directory storage/app/private/prc-import-20261022
+php scripts/prc/import.php "--directory=$directory" --apply
+python scripts/prc/fetch.py images --source $source --directory $directory --workers 8
+php scripts/prc/import.php "--directory=$directory" --apply --images-only
+php scripts/prc/verify.php $directory
+python scripts/prc/report.py --directory $directory
 ```
 
 `import.php` usa un bloqueo de ejecución, hace respaldo antes de escribir y deja

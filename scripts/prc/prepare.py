@@ -7,6 +7,8 @@ import pathlib
 import re
 import unicodedata
 
+from sources import product_image_url, source_url
+
 
 def norm(value):
     value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode().upper()
@@ -203,6 +205,7 @@ def category(product):
 
 
 def prepare(source, directory):
+    image_base_url = source_url("PRC_PRODUCT_IMAGE_BASE_URL")
     raw = source.read_bytes()
     products = json.loads(raw.decode("utf-8-sig"))
     snapshot = directory / "source.json"
@@ -222,7 +225,7 @@ def prepare(source, directory):
         barcode = compact(product.get("barcode"))
         name = compact(product["nombre"])
         item = {"source_id": int(product["id"]), "descripcion": name, "barcode": barcode,
-                "image_url": f"https://apis.ccc-it.net/api/v1/producto/{int(product['id'])}/imagen"}
+                "image_url": product_image_url(image_base_url, product["id"])}
         issues = []
         if not re.fullmatch(r"[0-9]{5,50}", barcode):
             pending.append({**item, "reason": "codigo_barras_no_verificable"})

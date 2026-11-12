@@ -40,8 +40,8 @@ Código: primer carácter del nombre en mayúsculas y últimos cinco dígitos de
 Las colisiones llevan el sufijo `-ID_ORIGEN`, autorizado por el usuario.
 Las barras se conservaron como texto, incluyendo ceros iniciales.
 
-Las imágenes están **dentro de `productos.imagen` como base64**, descargadas desde
-`https://apis.ccc-it.net/api/v1/producto/ID_ORIGEN/imagen`.
+Las imágenes están **dentro de `productos.imagen` como base64**. Cada URL de origen
+se conserva en el campo `image_url` de `plan.json`.
 Se comprobaron su formato y sus bytes por SHA-256; el controlador de la API entrega
 las imágenes guardadas. Las respuestas vacías o archivos corruptos del proveedor
 quedan listados en `missing-images.json`. No se sustituyeron por imágenes ficticias.

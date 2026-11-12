@@ -6,8 +6,14 @@ $tasks = [['frm', 'tar', 'tarbtn02'], ['frm', 'tar', 'tarbtn04'], ['frm', 'tar',
 $transfer = [['frm', 'trf', 'trfbtn02']];
 
 return [
+    'lost-sale-products' => $source('productos', ['codigo', 'descripcion'], [['frm', 'vpd', 'vpdbtn01']], ['search' => ['codigo', 'codigobar', 'descripcion']]),
+    'lost-sale-stocks' => $source('stocks', ['descripcion'], [['frm', 'vpd', 'vpdbtn01']]),
+    'lost-sale-users' => $source('usuariospos', ['nombre'], [['frm', 'vpd', 'vpdbtn01']]),
     'cost-report-products' => $source('productos', ['codigo', 'descripcion'], [['frm', 'rct', 'rctbtn02']], ['search' => ['codigo', 'codigobar', 'descripcion']]),
     'cost-report-providers' => $source('proveedores', ['nombre'], [['frm', 'rct', 'rctbtn01']]),
+    'sale-alert-products' => $source('productos', ['codigo', 'descripcion'], [['frm', 'avt', 'avtbtn02']], ['search' => ['codigo', 'codigobar', 'descripcion']]),
+    'sale-alert-categories' => $source('prod_categorias', ['nombre'], [['frm', 'avt', 'avtbtn02']]),
+    'sale-alert-stocks' => $source('stocks', ['descripcion'], [['frm', 'avt', 'avtbtn02']], ['scope' => 'active-stocks']),
     'product-categories' => $source('prod_categorias', ['nombre'], $products),
     'product-states' => $source('prod_estado', ['descripcion'], $products),
     'product-units' => $source('prod_unidades', ['abreviatura_c', 'abreviatura_v'], $products, ['columns' => ['abreviatura_c', 'cantidad_c', 'abreviatura_v', 'cantidad_v'], 'search' => ['abreviatura_c', 'abreviatura_v', 'cantidad_c', 'cantidad_v']]),
@@ -36,6 +42,7 @@ return [
     'purchase-types' => $source('compra_tipo', ['descripcion'], [['frm', 'cmp', 'cmpbtn07']], ['id' => 'int']),
     'payment-types' => $source('transc_tipo', ['descripcion'], [['frm', 'ctr', 'ctrbtn07']]),
     'payment-purchases' => $source('compras', ['nro'], [['frm', 'ctr', 'ctrbtn07']], ['columns' => ['nro', 'proveedor', 'total'], 'scope' => 'purchases', 'search' => ['compras.nro', 'proveedores.nombre']]),
+    'distribution-products' => $source('productos', ['codigo', 'descripcion'], [['frm', 'dst', 'dstbtn04']], ['search' => ['codigo', 'codigobar', 'descripcion']]),
     'distribution-lots' => $source('lotes', ['lote'], [['frm', 'dst', 'dstbtn02']], ['parents' => ['product' => 'producto'], 'scope' => 'distribution-lots']),
     'distribution-stocks' => $source('stocks', ['descripcion'], [['frm', 'dst', 'dstbtn02'], ['frm', 'dst', 'dstbtn03']], ['scope' => 'active-stocks']),
     'transfer-types' => $source('transferencias_tipo', ['descripcion'], $transfer),

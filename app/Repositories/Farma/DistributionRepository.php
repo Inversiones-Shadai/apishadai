@@ -96,4 +96,32 @@ class DistributionRepository implements DistributionService
             return $distribution->fresh('loteDetalle.compraDetalle');
         });
     }
+
+    /** @param array<string, mixed> $data */
+    public function createCatalogLot(array $data): Lote
+    {
+        return DB::transaction(function () use ($data): Lote {
+            // Use the same mutex as POS purchases and child lots to prevent duplicate master lots.
+            DB::table('pos_compra_lote_mutex')->where('id', 1)->lockForUpdate()->firstOrFail();
+            if (! DB::table('productos')->where('id', $data['producto'])->lockForUpdate()->exists()) {
+                throw ValidationException::withMessages(['producto' => 'El producto ya no está disponible.']);
+            }
+            $number = trim($data['lote']);
+            $query = $this->lot->newQuery()->where('producto', $data['producto'])->where('lote', $number)
+                ->whereRaw(DB::getDriverName() === 'mysql' ? 'BINARY lote = ?' : 'lote COLLATE BINARY = ?', [$number]);
+            foreach (['fecha_elab', 'fecha_exp'] as $field) {
+                empty($data[$field]) ? $query->whereNull($field) : $query->whereDate($field, $data[$field]);
+            }
+            if ($query->lockForUpdate()->exists()) {
+                throw ValidationException::withMessages(['lote' => 'Este lote ya está registrado para el producto y las mismas fechas. Selecciónalo para configurar sus precios.']);
+            }
+
+            return $this->lot->newQuery()->create([
+                'producto' => $data['producto'], 'lote' => $number,
+                'fecha_elab' => $data['fecha_elab'] ?? null, 'fecha_exp' => $data['fecha_exp'] ?? null,
+                'costo' => $data['costo'] ?? null, 'isv' => $data['isv'],
+                'cantidad' => 0, 'compra' => null,
+            ])->load(['distribucionDetalle', 'compraDetalle:id,nro']);
+        }, 3);
+    }
 }

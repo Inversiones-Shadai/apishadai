@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\API\Farma;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Farma\Distribucion\CatalogLotRequest;
 use App\Http\Requests\Farma\Distribucion\DistributionRequest;
 use App\Http\Resources\Farma\DistributionLotResource;
 use App\Http\Resources\Farma\DistributionProductResource;
@@ -10,6 +11,7 @@ use App\Http\Resources\Farma\DistributionResource;
 use App\Interfaces\Farma\DistributionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class DistributionController extends Controller
 {
@@ -50,5 +52,16 @@ class DistributionController extends Controller
         return $distribution === null
             ? $this->sendError('El lote seleccionado no existe.', null, 404)
             : $this->sendResponse(new DistributionResource($distribution), 'Precios y descuentos guardados.');
+    }
+
+    public function createLot(CatalogLotRequest $request): JsonResponse
+    {
+        try {
+            $lot = $this->repository->createCatalogLot($request->validated());
+        } catch (ValidationException $exception) {
+            return $this->sendError('Revisa los datos del lote.', ['errors' => $exception->errors()], 422);
+        }
+
+        return $this->sendResponse(new DistributionLotResource($lot), 'Lote registrado en el catálogo. Las existencias de los stocks no se modificaron.', 201);
     }
 }

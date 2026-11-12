@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Farma\Productos;
 
 use App\Http\Requests\BaseRequest;
+use App\Models\Farma\ProdCategoria;
 use Illuminate\Validation\Rule;
 
 use function is_string;
@@ -54,7 +55,8 @@ class ProductRequest extends BaseRequest
             'categoria.id' => ['required', 'integer', 'exists:prod_categorias,id'],
             'laboratorio.id' => ['required', 'integer', 'exists:laboratorios,id'],
             'unidad.id' => ['required', 'integer', 'exists:prod_unidades,id'],
-            'familia.id' => ['required', 'integer', 'exists:familia,id'],
+            'familia' => ['nullable', 'array', 'required_array_keys:id'],
+            'familia.id' => [Rule::requiredIf(fn (): bool => $this->categoryRequiresFamily()), 'nullable', 'integer', 'min:1', 'exists:familia,id'],
             'codigo' => [
                 'required',
                 'string',
@@ -83,10 +85,24 @@ class ProductRequest extends BaseRequest
         ];
     }
 
+    private function categoryRequiresFamily(): bool
+    {
+        $categoryId = $this->input('categoria.id');
+        if ((! is_int($categoryId) && ! is_string($categoryId))
+            || filter_var($categoryId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
+            return false;
+        }
+
+        $name = ProdCategoria::query()->whereKey($categoryId)->value('nombre');
+
+        return $name !== null && ProdCategoria::requiresFamily($name);
+    }
+
     protected function customMessages(): array
     {
         return [
             '*.required' => 'El campo :attribute es obligatorio.',
+            'familia.id.required' => 'Selecciona una familia para esta categoría.',
             '*.exists' => 'El valor seleccionado para :attribute no existe.',
             '*.unique' => 'El valor de :attribute ya está registrado.',
             '*.max' => 'El campo :attribute excede la longitud permitida.',

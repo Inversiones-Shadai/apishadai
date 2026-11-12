@@ -23,6 +23,7 @@ class DesktopLicenseCustomersTest extends TestCase
         $this->freezeTime();
         (require database_path('migrations/2026_10_26_154927_create_desktop_licensing_tables.php'))->up();
         (require database_path('migrations/2026_10_26_162642_add_terms_to_desktop_licenses_table.php'))->up();
+        (require database_path('migrations/2026_11_07_000001_add_desktop_license_key_reveal.php'))->up();
         $this->withoutMiddleware([DeviceSecurityMiddleware::class, EnsureLicensePermission::class, IdempotencyMiddleware::class,
             JWTAuthenticationMiddleware::class, MatchTokenMiddleware::class]);
         $user = new User;
@@ -67,8 +68,9 @@ class DesktopLicenseCustomersTest extends TestCase
         $this->postJson('/api/config/licenses', $payload)->assertUnprocessable()->assertJsonValidationErrors('customer_id');
         $this->postJson('/api/config/licenses', $payload + ['customer_id' => (string) Str::uuid()])->assertUnprocessable()->assertJsonValidationErrors('customer_id');
         $this->assertDatabaseCount('desktop_licenses', 0);
-        $this->postJson('/api/config/licenses', $payload + ['customer_id' => $this->dndev()])->assertOk()->assertJsonPath('data.customer_id', $this->dndev());
-        $this->assertDatabaseHas('desktop_licenses', ['label' => 'Named license', 'customer_id' => $this->dndev()]);
+        $this->postJson('/api/config/licenses', $payload + ['customer_id' => $this->dndev()])->assertUnprocessable()
+            ->assertJsonValidationErrors(['challenge_id', 'code']);
+        $this->assertDatabaseCount('desktop_licenses', 0);
     }
 
     public function test_lists_groups_with_customer_names_and_customer_filter_survives_pagination_and_search(): void

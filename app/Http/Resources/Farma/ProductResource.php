@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\Farma;
 
+use App\Models\Farma\ProdCategoria;
 use App\Services\Images\ImageStorage;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -26,7 +27,10 @@ class ProductResource extends JsonResource
             'codigo' => $this->codigo,
             'codigobar' => $this->codigobar,
             'descripcion' => $this->descripcion,
-            'categoria' => $this->whenLoaded('categoriaDetalle', fn ($categoria): array => $categoria->only(['id', 'nombre'])),
+            'categoria' => $this->whenLoaded('categoriaDetalle', fn (ProdCategoria $categoria): array => [
+                ...$categoria->only(['id', 'nombre']),
+                'requires_family' => ProdCategoria::requiresFamily($categoria->nombre),
+            ]),
             'laboratorio' => $this->whenLoaded('laboratorioDetalle', fn ($laboratorio): array => $laboratorio->only(['id', 'nombre', 'direccion'])),
             'unidad' => $this->whenLoaded('unidadDetalle', fn ($unidad): array => $unidad->only(['id', 'abreviatura_c', 'cantidad_c', 'abreviatura_v', 'cantidad_v'])),
             'familia' => $this->whenLoaded('Familia', fn ($familia): array => [

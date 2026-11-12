@@ -8,6 +8,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from sources import product_image_url, source_url
+
 
 def request(url, ajax=False):
     headers = {"User-Agent": "Shadai-catalog-import/1.0", "Accept": "application/json" if ajax else "image/*"}
@@ -32,12 +34,13 @@ def request(url, ajax=False):
 
 
 def registers(directory):
+    register_url = source_url("PRC_ARSA_REGISTER_URL")
     for tab in ["MRS", "RMH", "BIRS", "btrs", "pnrs", "rpnh"]:
         target = directory / f"arsa-{tab}.json"
         if target.exists():
             print(f"Cached {tab}", flush=True)
             continue
-        url = "https://sicreb.arsa.hn/Servicios/Medicamentos?" + urllib.parse.urlencode({
+        url = register_url + "?" + urllib.parse.urlencode({
             "NombrePestania": tab, "pagina": 1, "tamanioPagina": 100000,
         })
         body, _ = request(url, True)
@@ -49,6 +52,7 @@ def registers(directory):
 
 
 def images(source, directory, workers):
+    image_base_url = source_url("PRC_PRODUCT_IMAGE_BASE_URL")
     products = json.loads(pathlib.Path(source).read_text(encoding="utf-8-sig"))
     image_dir = directory / "images"
     image_dir.mkdir(exist_ok=True)
@@ -59,7 +63,7 @@ def images(source, directory, workers):
         target = image_dir / f"{int(product['id'])}.img"
         if target.exists():
             return {"id": product["id"], "status": "cached", "bytes": target.stat().st_size}
-        url = f"https://apis.ccc-it.net/api/v1/producto/{int(product['id'])}/imagen"
+        url = product_image_url(image_base_url, product["id"])
         try:
             body, mime = request(url)
             if not (body.startswith(b"\xff\xd8\xff") or body.startswith(b"\x89PNG\r\n\x1a\n")):

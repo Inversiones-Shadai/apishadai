@@ -1,21 +1,23 @@
 <?php
 
-require __DIR__.'/../../vendor/autoload.php';
-$app = require __DIR__.'/../../bootstrap/app.php';
-$app->make(Kernel::class)->bootstrap();
-
 use App\Http\Controllers\API\Farma\Productos\ProductController;
 use App\Utils\Services\Base64UtilityService;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
+require __DIR__.'/../../vendor/autoload.php';
+$app = require __DIR__.'/../../bootstrap/app.php';
+$app->make(Kernel::class)->bootstrap();
+require __DIR__.'/target.php';
+
 function comparable(string $value): string
 {
     return str_replace(',', '.', mb_strtoupper(preg_replace('/\s+/u', '', Str::ascii($value))));
 }
 
-$directory = realpath($argv[1] ?? storage_path('app/private/prc-import-20261022'));
+$directory = prcDirectory($argv[1] ?? null);
+assertLocalPrcDatabase();
 $plan = json_decode(file_get_contents($directory.'/plan.json'), true, flags: JSON_THROW_ON_ERROR);
 $bySource = array_column($plan['products'], null, 'source_id');
 $owned = [];

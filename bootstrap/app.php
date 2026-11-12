@@ -124,6 +124,14 @@ return Application::configure(basePath: dirname(__DIR__))
             }
         });
         $exceptions->render(function (Exception $e, Request $request) {
+            if ($request->is('api/headquarters/pos/ventas-perdidas', 'api/farma/reportes/ventas-perdidas')) {
+                if ($e instanceof ValidationException) {
+                    return response()->json(['message' => 'Revisa los datos de ventas perdidas.', 'code' => 422, 'data' => null, 'errors' => $e->errors()], 422);
+                }
+                if ($e instanceof HttpExceptionInterface) {
+                    return response()->json(['message' => $e->getMessage() ?: 'No se pudo completar la operación de ventas perdidas.', 'code' => $e->getStatusCode(), 'data' => null], $e->getStatusCode(), $e->getHeaders());
+                }
+            }
             if ($request->is('api/config/desktop-releases', 'api/config/desktop-releases/*', 'api/headquarters/updates/*')) {
                 if ($e instanceof ValidationException) {
                     return response()->json(['message' => 'Revisa los datos de la versión.', 'code' => 422, 'data' => null, 'errors' => $e->errors()], 422);

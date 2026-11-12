@@ -1,10 +1,6 @@
 <?php
 
 // Apply only reviewed plan refinements to records created by this import.
-require __DIR__.'/../../vendor/autoload.php';
-$app = require __DIR__.'/../../bootstrap/app.php';
-$app->make(Kernel::class)->bootstrap();
-
 use App\Models\Farma\Concentracion;
 use App\Models\Farma\FamAdministracion;
 use App\Models\Farma\Familia;
@@ -16,7 +12,13 @@ use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-$directory = realpath($argv[1] ?? storage_path('app/private/prc-import-20261022'));
+require __DIR__.'/../../vendor/autoload.php';
+$app = require __DIR__.'/../../bootstrap/app.php';
+$app->make(Kernel::class)->bootstrap();
+require __DIR__.'/target.php';
+
+$directory = prcDirectory($argv[1] ?? null);
+assertLocalPrcDatabase();
 $lock = fopen($directory.'/import.lock', 'c');
 if (! flock($lock, LOCK_EX | LOCK_NB)) {
     throw new RuntimeException('Another import is running.');

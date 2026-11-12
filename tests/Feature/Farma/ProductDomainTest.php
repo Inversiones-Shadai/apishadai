@@ -330,6 +330,42 @@ class ProductDomainTest extends TestCase
         $migration->down();
     }
 
+    public function test_product_family_is_required_only_for_the_designated_categories(): void
+    {
+        $this->withoutMiddleware();
+        [$product] = $this->seedProductDomain();
+        (require database_path('migrations/2026_11_11_000001_allow_products_without_family.php'))->up();
+        $base = $this->productResourceBase('ProductController');
+        $input = [...$product->only(['categoria', 'laboratorio', 'unidad', 'descripcion', 'estado']), 'codigo' => 'SIN-FAMILIA'];
+
+        foreach (['Farmacia', 'CONGELADOS', 'controlados', 'Leches'] as $name) {
+            $category = ProdCategoria::query()->create(['nombre' => $name]);
+            $this->postJson($base.'/crear', [...$input, 'categoria' => ['id' => $category->id]])
+                ->assertUnprocessable()
+                ->assertJsonValidationErrors(['familia.id' => 'Selecciona una familia para esta categoría.'], 'data.errors');
+        }
+
+        $this->postJson($base.'/crear', [...$input, 'familia' => ['id' => 999]])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['familia.id'], 'data.errors');
+        $this->postJson($base.'/crear', $input)->assertCreated();
+        $created = Producto::query()->where('codigo', 'SIN-FAMILIA')->firstOrFail();
+        $this->assertNull($created->familia);
+        $this->getJson($base.'/buscar/'.$created->id)->assertOk()->assertJsonPath('data.familia_id', null);
+        $this->putJson($this->updatePath($base, $created->id), $input)->assertOk();
+        $update = $this->updatePath($base, $product->id);
+        $updateInput = [...$input, 'codigo' => $product->codigo];
+        $this->putJson($update, $updateInput)->assertOk();
+        $this->assertSame($product->familia, $product->fresh()->familia);
+        $this->putJson($update, [...$updateInput, 'familia' => null])->assertOk();
+        $this->assertNull($product->fresh()->familia);
+
+        $this->postJson($base.'/crear', [
+            ...$input, 'codigo' => 'CON-FAMILIA', 'categoria' => $category->id, 'familia' => ['id' => $product->familia],
+        ])->assertCreated();
+        $this->assertDatabaseHas('productos', ['codigo' => 'CON-FAMILIA', 'familia' => $product->familia]);
+    }
+
     public function test_headquarters_product_changes_include_the_final_principles_and_image(): void
     {
         [$product, $active] = $this->seedProductDomain();
@@ -477,7 +513,7 @@ class ProductDomainTest extends TestCase
         );
 
         $this->assertSame($product->categoria, $payload['categoria_id']);
-        $this->assertSame(['id' => $product->categoria, 'nombre' => 'Categoría prueba'], $payload['categoria']);
+        $this->assertSame(['id' => $product->categoria, 'nombre' => 'Categoría prueba', 'requires_family' => false], $payload['categoria']);
         $this->assertSame($product->laboratorio, $payload['laboratorio']['id']);
         $this->assertSame('Tegucigalpa', $payload['laboratorio']['direccion']);
         $this->assertArrayHasKey('nombre', $payload['laboratorio']);

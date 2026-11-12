@@ -12,23 +12,27 @@ require __DIR__.'/../vendor/autoload.php';
 $app = require __DIR__.'/../bootstrap/app.php';
 $app->make(Kernel::class)->bootstrap();
 try {
-    if (! $app->environment('local') || config('database.connections.'.config('database.default').'.host') !== '127.0.0.1'
+    if (! $app->environment('local') || ! in_array(DB::connection()->getConfig('host'), ['127.0.0.1', 'localhost', '::1'], true)
         || count($argv) !== 2) {
         throw new RuntimeException('El piloto CLI solo admite el backend local y un manifiesto explícito.');
     }
+    $pilot = config('desktop_updates.local_pilot');
+    if ($pilot['purpose'] === '' || $pilot['version'] === '' || ! preg_match('/\A[A-F0-9]{40}\z/', $pilot['thumbprint'])) {
+        throw new RuntimeException('Configura el propósito, la versión y la huella del piloto local en .env.');
+    }
     $input = json_decode(file_get_contents($argv[1]), true, 32, JSON_THROW_ON_ERROR);
-    if (($input['purpose'] ?? '') !== 'authorized-local-desktop-pilot-20261029' || ! in_array($input['product'] ?? '', ['shpos', 'shpos-administrator', 'hq-client'], true)) {
+    if (($input['purpose'] ?? '') !== $pilot['purpose'] || ! array_key_exists($input['product'] ?? '', config('desktop_updates.products'))) {
         throw new RuntimeException('Manifiesto de piloto no reconocido.');
     }
-    $statePath = $argv[1].'.state.json';
+    $statePath = "$argv[1].state.json";
     $state = is_file($statePath) ? json_decode(file_get_contents($statePath), true, 32, JSON_THROW_ON_ERROR) : [];
     $save = static function () use (&$state, $statePath): void {
         file_put_contents($statePath.'.tmp', json_encode($state, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
-        rename($statePath.'.tmp', $statePath);
+        rename("$statePath.tmp", $statePath);
     };
     $metadata = json_decode(file_get_contents($input['metadata']), true, 32, JSON_THROW_ON_ERROR);
-    if ($metadata['Version'] !== '1.0.2.0' || $metadata['Product'] !== $input['product']
-        || $metadata['SigningCertificateThumbprint'] !== '7E62D589A644E103AC0A75676FA33A7DCCE3408E') {
+    if (($metadata['Version'] ?? null) !== $pilot['version'] || ($metadata['Product'] ?? null) !== $input['product']
+        || ($metadata['SigningCertificateThumbprint'] ?? null) !== $pilot['thumbprint']) {
         throw new RuntimeException('El paquete no corresponde al objetivo firmado del piloto.');
     }
     $artifact = DesktopReleaseArtifact::fromArray($metadata);
@@ -52,7 +56,7 @@ try {
     $catalog = app(DesktopReleaseCatalog::class);
     if (! isset($state['release'])) {
         $state['release'] = $catalog->create(['request_id' => $input['create_request_id'], 'artifact_id' => $state['artifact_id'],
-            'notes' => 'Piloto local autorizado 29/10/2026. Solo este equipo; certificado autofirmado; no promover a estable.',
+            'notes' => 'Piloto local autorizado para el equipo indicado en el manifiesto.',
             'min_api_contract' => 1, 'min_schema_version' => $input['schema_version'], 'max_schema_version' => $input['schema_version'], 'required' => false], 0);
         $save();
     }

@@ -14,6 +14,11 @@ class ProdCategoria extends Model
 
     protected $fillable = ['nombre'];
 
+    public static function requiresFamily(string $name): bool
+    {
+        return in_array(mb_strtoupper(trim($name)), ['FARMACIA', 'CONGELADOS', 'CONTROLADOS', 'LECHES'], true);
+    }
+
     public function productos(): HasMany
     {
         return $this->hasMany(Producto::class, 'categoria');

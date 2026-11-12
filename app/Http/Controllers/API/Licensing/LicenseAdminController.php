@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\API\Licensing;
 
 use App\Http\Controllers\Controller;
+use App\Services\Licensing\LicenseGenerationApproval;
+use App\Services\Licensing\LicenseKeyReveal;
 use App\Services\Licensing\LicenseManager;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,6 +21,7 @@ class LicenseAdminController extends Controller
             ->select(['licenses.id', 'licenses.label', 'licenses.product', 'licenses.key_suffix', 'licenses.seats', 'licenses.enabled', 'licenses.expires_at',
                 'licenses.term_months', 'licenses.term_started_at', 'licenses.created_at', 'licenses.customer_id', 'customers.name as customer_name'])
             ->selectRaw('NOT EXISTS (SELECT 1 FROM desktop_license_devices WHERE license_id = licenses.id AND revoked_at IS NULL) as can_delete')
+            ->selectRaw('licenses.key_encrypted IS NOT NULL as can_reveal_key')
             ->when($data['customer_id'] ?? null, fn ($q, $customer) => $q->where('licenses.customer_id', $customer))
             ->when($data['search'] ?? '', fn ($q, $search) => $q->where(fn ($searchQuery) => $searchQuery->where('licenses.label', 'like', '%'.$search.'%')
                 ->orWhere('customers.name_key', 'like', '%'.mb_strtolower($search).'%')))
@@ -28,6 +31,7 @@ class LicenseAdminController extends Controller
         $licenses->getCollection()->transform(function ($license) use ($counts): object {
             $license->used_seats = (int) ($counts[$license->id] ?? 0);
             $license->can_delete = (bool) $license->can_delete;
+            $license->can_reveal_key = (bool) $license->can_reveal_key;
 
             return $license;
         });
@@ -35,12 +39,42 @@ class LicenseAdminController extends Controller
         return $this->sendResponse($licenses, withPagination: true)->header('Cache-Control', 'no-store');
     }
 
-    public function store(Request $request, LicenseManager $manager): JsonResponse
+    public function store(Request $request, LicenseManager $manager, LicenseGenerationApproval $approval): JsonResponse
     {
-        $data = $request->validate($this->rules() + ['product' => ['required', Rule::in(config('licensing.products'))],
-            'term_months' => ['required', 'integer', Rule::in(config('licensing.term_months'))], 'renewal_months' => ['prohibited']]);
+        $data = $request->validate($this->generationRules() + ['challenge_id' => ['required', 'uuid'],
+            'code' => ['required', 'string', 'regex:/\A[0-9]{6}\z/']]);
 
-        return $this->sendResponse($manager->issue($data, $request->user()->getAuthIdentifier()), 'Licencia generada. Guarda la clave; solo se muestra una vez.')->header('Cache-Control', 'no-store');
+        return $this->sendResponse($approval->issue($data, $request->user()->getAuthIdentifier(), hash('sha256', (string) $request->bearerToken()),
+            $data['challenge_id'], $data['code'], $manager), 'Licencia generada con autorización por correo.')->header('Cache-Control', 'no-store');
+    }
+
+    public function requestGenerationCode(Request $request, LicenseGenerationApproval $approval): JsonResponse
+    {
+        $data = $request->validate($this->generationRules());
+
+        return $this->sendResponse($approval->requestCode($data, $request->user()->getAuthIdentifier(), hash('sha256', (string) $request->bearerToken())),
+            'Código de creación enviado al correo administrador. Vence en 10 minutos.')->header('Cache-Control', 'no-store');
+    }
+
+    private function generationRules(): array
+    {
+        return $this->rules() + ['product' => ['required', Rule::in(config('licensing.products'))],
+            'term_months' => ['required', 'integer', Rule::in(config('licensing.term_months'))], 'renewal_months' => ['prohibited']];
+    }
+
+    public function requestKeyCode(Request $request, string $id, LicenseKeyReveal $reveal): JsonResponse
+    {
+        return $this->sendResponse($reveal->requestCode($id, $request->user()->getAuthIdentifier(), hash('sha256', (string) $request->bearerToken())),
+            'Código enviado al correo administrador. Vence en 10 minutos.')->header('Cache-Control', 'no-store');
+    }
+
+    public function revealKey(Request $request, string $id, LicenseKeyReveal $reveal): JsonResponse
+    {
+        $data = $request->validate(['challenge_id' => ['required', 'uuid'], 'code' => ['required', 'string', 'regex:/\A[0-9]{6}\z/']]);
+
+        return $this->sendResponse(['license_key' => $reveal->reveal($id, $request->user()->getAuthIdentifier(),
+            hash('sha256', (string) $request->bearerToken()), $data['challenge_id'], $data['code'])], 'Consulta autorizada.')
+            ->header('Cache-Control', 'no-store');
     }
 
     public function update(Request $request, string $id, LicenseManager $manager): JsonResponse

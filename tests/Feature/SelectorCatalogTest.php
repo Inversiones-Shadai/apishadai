@@ -8,6 +8,7 @@ use App\Services\Selectors\SelectorCatalog;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class SelectorCatalogTest extends TestCase
@@ -72,6 +73,76 @@ class SelectorCatalogTest extends TestCase
         parent::tearDown();
     }
 
+    public function test_lost_sales_count_each_report_once_and_apply_all_report_filters(): void
+    {
+        foreach (['vistas', 'actionsvistas'] as $table) {
+            Schema::table($table, fn (Blueprint $table) => [$table->string('nombre')->nullable(), $table->timestamps()]);
+        }
+        foreach (['stock_estado', 'device_estado'] as $table) {
+            Schema::create($table, fn (Blueprint $table) => [$table->id(), $table->string('descripcion')]);
+            DB::table($table)->insert(['id' => 1, 'descripcion' => 'ACTIVO']);
+        }
+        Schema::create('stocks', fn (Blueprint $table) => [$table->id(), $table->integer('estado'), $table->string('descripcion')]);
+        DB::table('stocks')->insert([['id' => 1, 'estado' => 1, 'descripcion' => 'Sucursal Norte'], ['id' => 2, 'estado' => 1, 'descripcion' => 'Sucursal Sur']]);
+        Schema::create('devices', fn (Blueprint $table) => [$table->id(), $table->integer('stock'), $table->integer('estado'), $table->uuid('hq_client_uuid')]);
+        $north = (string) Str::uuid();
+        $south = (string) Str::uuid();
+        DB::table('devices')->insert([
+            ['id' => 1, 'stock' => 1, 'estado' => 1, 'hq_client_uuid' => $north],
+            ['id' => 2, 'stock' => 2, 'estado' => 1, 'hq_client_uuid' => $south],
+        ]);
+        Schema::create('productos', fn (Blueprint $table) => [$table->id(), $table->string('codigo'), $table->string('descripcion')]);
+        DB::table('productos')->insert([
+            ['id' => 1, 'codigo' => 'A1', 'descripcion' => 'Producto A'],
+            ['id' => 2, 'codigo' => 'B2', 'descripcion' => 'Producto B'],
+        ]);
+        Schema::create('usuariospos', fn (Blueprint $table) => [$table->id(), $table->string('nombre')]);
+        DB::table('usuariospos')->insert([['id' => 21, 'nombre' => 'Operador A'], ['id' => 22, 'nombre' => 'Operador B']]);
+        (require database_path('migrations/2026_11_11_000002_create_lost_sales.php'))->up();
+        $event = fn (string $product, string $user, string $date = '2026-11-11T19:00:00Z'): array => [
+            'request_id' => (string) Str::uuid(), 'producto_id' => $product,
+            'usuario_pos_id' => $user, 'reported_at' => $date,
+        ];
+        $northBatch = ['device_id' => 1, 'client_uuid' => $north, 'payload' => [
+            'stock_id' => '1', 'rows' => [
+                $event('1', '21'), $event('2', '21', '2026-11-11T05:59:59Z'),
+                $event('2', '21', '2026-11-12T05:59:59Z'), $event('2', '22'),
+            ],
+        ]];
+        $endpoint = '/api/headquarters/pos/ventas-perdidas';
+        $this->postJson($endpoint, $northBatch)->assertOk()->assertJsonPath('data.results.0.accepted', true);
+        $this->postJson($endpoint, $northBatch)->assertOk();
+        $southBatch = ['device_id' => 2, 'client_uuid' => $south, 'payload' => [
+            'stock_id' => '2', 'rows' => [$event('2', '21', '2026-11-12T06:00:00Z')],
+        ]];
+        $this->postJson($endpoint, $southBatch)->assertOk();
+        $southBatch['payload']['stock_id'] = '1';
+        $this->postJson($endpoint, $southBatch)->assertForbidden();
+        $this->assertDatabaseCount('pos_lost_sales', 5);
+
+        $report = '/api/farma/reportes/ventas-perdidas';
+        $this->withHeader('Action-Btn', 'vpdbtn01')->getJson($report)->assertForbidden();
+        DB::table('permisos')->insert([
+            'usuario' => 7, 'modulo' => 1, 'vista' => DB::table('vistas')->where('codigo', 'vpd')->value('id'),
+            'actionvista' => DB::table('actionsvistas')->where('codigo', 'vpdbtn01')->value('id'),
+        ]);
+        $this->getJson($report)->assertOk()->assertJsonCount(4, 'data')
+            ->assertJsonPath('data.0.codigo', 'B2')->assertJsonPath('data.0.registros', 2)
+            ->assertJsonPath('data.0.stock', 'Sucursal Norte')->assertJsonPath('data.0.usuario', 'Operador A')
+            ->assertJsonPath('data.1.codigo', 'A1')->assertJsonPath('data.1.registros', 1)
+            ->assertJsonPath('data.2.usuario', 'Operador B')->assertJsonPath('data.3.stock', 'Sucursal Sur');
+        $this->getJson($report.'?stock_id=1&producto_id=2&usuario_pos_id=21')->assertOk()
+            ->assertJsonCount(1, 'data')->assertJsonPath('data.0.codigo', 'B2')->assertJsonPath('data.0.registros', 2);
+        $this->getJson($report.'?stock_id=2&usuario_pos_id=22')->assertOk()->assertJsonCount(0, 'data');
+        $this->getJson($report.'?stock_id=1&producto_id=2&usuario_pos_id=21&fecha_desde=2026-11-11&fecha_hasta=2026-11-11')
+            ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.registros', 1)
+            ->assertJsonPath('data.0.ultimo_registro', '2026-11-12 05:59:59');
+        $this->getJson($report.'?fecha_hasta=2026-11-11')->assertOk()->assertJsonCount(3, 'data');
+        $this->getJson($report.'?fecha_desde=2026-11-12')->assertOk()->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.stock', 'Sucursal Sur');
+        $this->getJson($report.'?fecha_desde=2026-11-12&fecha_hasta=2026-11-11')->assertUnprocessable();
+    }
+
     public function test_catalogs_are_paged_at_ten_and_search_applies_before_paging(): void
     {
         $this->getJson('/api/selectors/product-categories')->assertOk()->assertJsonCount(10, 'data')->assertJsonPath('meta.total', 34);
@@ -80,6 +151,14 @@ class SelectorCatalogTest extends TestCase
         $this->getJson('/api/selectors/product-categories?selected=1')->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', '1');
         $this->getJson('/api/selectors/product-categories?per_page=5000&all=1')->assertOk()->assertJsonCount(10, 'data');
         $this->assertArrayNotHasKey('private_notes', $this->getJson('/api/selectors/product-categories')->json('data.0.record'));
+    }
+
+    public function test_product_category_selector_reports_when_a_family_is_required(): void
+    {
+        DB::table('prod_categorias')->where('id', 1)->update(['nombre' => 'Farmacia']);
+
+        $this->getJson('/api/selectors/product-categories?selected=1')->assertOk()->assertJsonPath('data.0.record.requires_family', true);
+        $this->getJson('/api/selectors/product-categories?selected=2')->assertOk()->assertJsonPath('data.0.record.requires_family', false);
     }
 
     public function test_missing_expired_inactive_and_wrong_context_permissions_cannot_read_a_catalog(): void

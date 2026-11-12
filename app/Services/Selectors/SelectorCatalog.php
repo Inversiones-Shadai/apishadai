@@ -4,6 +4,7 @@ namespace App\Services\Selectors;
 
 use App\Http\Resources\Farma\DistributionLotResource;
 use App\Models\Farma\Lote;
+use App\Models\Farma\ProdCategoria;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
@@ -113,6 +114,9 @@ final class SelectorCatalog
                 $record = ($definition['scope'] ?? null) === 'distribution-lots'
                     ? DistributionLotResource::make($row)->resolve() : (array) $row;
                 $record['id'] = $record[$id];
+                if ($definition['table'] === 'prod_categorias') {
+                    $record['requires_family'] = ProdCategoria::requiresFamily($record['nombre']);
+                }
                 if (($definition['scope'] ?? null) === 'purchases') {
                     $record['total_aplicado'] = (float) $record['total_aplicado'];
                     $record['saldo'] = max(0, (float) $record['total'] - $record['total_aplicado']);

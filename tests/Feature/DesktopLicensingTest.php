@@ -10,6 +10,7 @@ use App\Http\Middleware\IdempotencyMiddleware;
 use App\Http\Middleware\JWTAuthenticationMiddleware;
 use App\Http\Middleware\MatchTokenMiddleware;
 use App\Services\Licensing\LicenseAuthority;
+use App\Services\Licensing\LicenseGenerationApproval;
 use App\Services\Licensing\LicenseManager;
 use Carbon\CarbonImmutable;
 use Illuminate\Auth\GenericUser;
@@ -56,6 +57,7 @@ class DesktopLicensingTest extends TestCase
         (require database_path('migrations/2026_10_26_154927_create_desktop_licensing_tables.php'))->up();
         (require database_path('migrations/2026_10_26_162642_add_terms_to_desktop_licenses_table.php'))->up();
         (require database_path('migrations/2026_10_26_172148_add_customers_to_desktop_licenses.php'))->up();
+        (require database_path('migrations/2026_11_07_000001_add_desktop_license_key_reveal.php'))->up();
     }
 
     public function test_activates_over_http_and_returns_device_bound_signed_72_hour_authorization(): void
@@ -305,7 +307,7 @@ class DesktopLicensingTest extends TestCase
         Route::post('/api/config/licenses/term-test', function (Request $request) {
             $request->setUserResolver(fn () => new GenericUser(['id' => 1]));
 
-            return (new LicenseAdminController)->store($request, app(LicenseManager::class));
+            return (new LicenseAdminController)->store($request, app(LicenseManager::class), app(LicenseGenerationApproval::class));
         });
         $payload = ['customer_id' => $this->customerId(), 'label' => 'Named license', 'product' => 'shpos', 'seats' => 1];
         foreach ([0, 2, 3, 18, -1, 1.5] as $months) {
@@ -314,8 +316,8 @@ class DesktopLicensingTest extends TestCase
         $this->postJson('/api/config/licenses/term-test', $payload)->assertUnprocessable()->assertJsonValidationErrors('term_months');
         $this->postJson('/api/config/licenses/term-test', $payload + ['term_months' => 1, 'expires_at' => '2099-01-01'])->assertUnprocessable()->assertJsonValidationErrors('expires_at');
         $this->assertDatabaseCount('desktop_licenses', 0);
-        $this->postJson('/api/config/licenses/term-test', $payload + ['term_months' => 6])->assertOk()->assertJsonPath('data.label', 'Named license')
-            ->assertJsonPath('data.term_months', 6)->assertJsonPath('data.expires_at', '2027-04-26T12:00:00+00:00');
+        $this->postJson('/api/config/licenses/term-test', $payload + ['term_months' => 6])->assertUnprocessable()
+            ->assertJsonValidationErrors(['challenge_id', 'code']);
     }
 
     public function test_api_refuses_application_reassignment_and_unrestricted_renewal(): void

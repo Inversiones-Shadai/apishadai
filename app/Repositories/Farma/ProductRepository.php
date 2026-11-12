@@ -369,8 +369,10 @@ class ProductRepository extends Repository implements ProductService
     protected function filterEmptyData(array $data): array
     {
         $filtered = parent::filterEmptyData($data);
-        if (array_key_exists('producto_padre_id', $data)) {
-            $filtered['producto_padre_id'] = $data['producto_padre_id'];
+        foreach (['producto_padre_id', 'familia'] as $field) {
+            if (array_key_exists($field, $data)) {
+                $filtered[$field] = $data[$field];
+            }
         }
         if (array_key_exists('codigobar', $data) && $data['codigobar'] === null) {
             $filtered['codigobar'] = null;

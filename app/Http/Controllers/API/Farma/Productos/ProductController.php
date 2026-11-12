@@ -314,8 +314,13 @@ class ProductController extends Controller
     public function update(ProductRequest $request, int $id): JsonResponse
     {
         try {
-            $productData = ProductData::fromValidated($request->validated());
+            $validated = $request->validated();
+            $productData = ProductData::fromValidated($validated);
             $data = $productData->toArray();
+
+            if (! array_key_exists('familia', $validated)) {
+                unset($data['familia']);
+            }
 
             if (isset($data['imagen'])) {
                 $data['imagen'] = $this->sanitizeImage((string) $data['imagen']);

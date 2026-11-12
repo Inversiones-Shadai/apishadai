@@ -1,10 +1,6 @@
 <?php
 
 // One-off, resumable PRC import. No credentials are accepted or written here.
-require __DIR__.'/../../vendor/autoload.php';
-$app = require __DIR__.'/../../bootstrap/app.php';
-$app->make(Kernel::class)->bootstrap();
-
 use App\Models\Farma\Concentracion;
 use App\Models\Farma\FamAdministracion;
 use App\Models\Farma\Familia;
@@ -21,11 +17,14 @@ use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
+require __DIR__.'/../../vendor/autoload.php';
+$app = require __DIR__.'/../../bootstrap/app.php';
+$app->make(Kernel::class)->bootstrap();
+require __DIR__.'/target.php';
+
 $options = getopt('', ['directory:', 'apply', 'images-only', 'limit:']);
-$directory = realpath($options['directory'] ?? storage_path('app/private/prc-import-20261022'));
-if ($directory === false || ! is_file($directory.'/plan.json')) {
-    throw new RuntimeException('Prepare plan.json first.');
-}
+$directory = prcDirectory($options['directory'] ?? null);
+assertLocalPrcDatabase();
 $lock = fopen($directory.'/import.lock', 'c');
 if (! flock($lock, LOCK_EX | LOCK_NB)) {
     throw new RuntimeException('Another import is running.');
@@ -33,9 +32,6 @@ if (! flock($lock, LOCK_EX | LOCK_NB)) {
 $plan = json_decode(file_get_contents($directory.'/plan.json'), true, flags: JSON_THROW_ON_ERROR);
 if (hash_file('sha256', $directory.'/source.json') !== $plan['source_sha256']) {
     throw new RuntimeException('Source snapshot does not match the plan.');
-}
-if (DB::connection()->getDatabaseName() !== 'shadaidb' || DB::connection()->getDriverName() !== 'mysql') {
-    throw new RuntimeException('This reviewed import targets the configured local shadaidb MySQL database.');
 }
 // Retain atomic outbox recording, but do not perform thousands of synchronous HQ requests.
 config(['headquarters.send_immediately' => false]);
